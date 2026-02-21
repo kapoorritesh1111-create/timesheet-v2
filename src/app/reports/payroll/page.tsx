@@ -11,7 +11,7 @@ import { toISODate } from "../../../lib/date";
 
 type EntryStatus = "draft" | "submitted" | "approved" | "rejected";
 
-type VTimeEntry = {
+type VTimeEntryAny = {
   id: string;
   user_id: string;
   entry_date: string; // YYYY-MM-DD
@@ -19,15 +19,20 @@ type VTimeEntry = {
   status: EntryStatus;
   hours_worked: number | null;
 
-  // v_time_entries extras
-  full_name: string | null;
-  project_name: string | null;
+  // may/may-not exist in your v_time_entries (depends on your DB view)
+  full_name?: string | null;
+  project_name?: string | null;
 
-  // from time_entries (te.*) via view
-  hourly_rate_snapshot: number | null;
+  // snapshot column on time_entries
+  hourly_rate_snapshot?: number | null;
+
+  // allow unknown extra cols from view
+  [key: string]: any;
 };
 
 type ProjectRow = { id: string; name: string };
+
+type DatePreset = "current_week" | "last_week" | "current_month" | "last_month" | "custom";
 
 function firstDayOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), 1);
@@ -35,14 +40,51 @@ function firstDayOfMonth(d: Date) {
 function lastDayOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 }
-function defaultStartEnd() {
-  // default = last calendar month
+
+/**
+ * Professional default: week starts Monday.
+ * If you prefer Sunday, tell me and I’ll flip it in one line.
+ */
+function startOfWeekMonday(d: Date) {
+  const copy = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const day = copy.getDay(); // 0=Sun ... 6=Sat
+  const diff = (day + 6) % 7; // Monday=0
+  copy.setDate(copy.getDate() - diff);
+  copy.setHours(0, 0, 0, 0);
+  return copy;
+}
+function endOfWeekMonday(d: Date) {
+  const s = startOfWeekMonday(d);
+  const e = new Date(s);
+  e.setDate(s.getDate() + 6);
+  e.setHours(0, 0, 0, 0);
+  return e;
+}
+
+function presetToRange(preset: DatePreset) {
   const now = new Date();
+
+  if (preset === "current_week") {
+    const s = startOfWeekMonday(now);
+    const e = endOfWeekMonday(now);
+    return { start: toISODate(s), end: toISODate(e) };
+  }
+
+  if (preset === "last_week") {
+    const lastWeekRef = new Date(now);
+    lastWeekRef.setDate(now.getDate() - 7);
+    const s = startOfWeekMonday(lastWeekRef);
+    const e = endOfWeekMonday(lastWeekRef);
+    return { start: toISODate(s), end: toISODate(e) };
+  }
+
+  if (preset === "current_month") {
+    return { start: toISODate(firstDayOfMonth(now)), end: toISODate(lastDayOfMonth(now)) };
+  }
+
+  // last_month
   const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  return {
-    start: toISODate(firstDayOfMonth(lastMonth)),
-    end: toISODate(lastDayOfMonth(lastMonth)),
-  };
+  return { start: toISODate(firstDayOfMonth(lastMonth)), end: toISODate(lastDayOfMonth(lastMonth)) };
 }
 
 function money(x: number) {
@@ -68,22 +110,49 @@ function downloadCsv(filename: string, csv: string) {
   URL.revokeObjectURL(url);
 }
 
+function getNameFromRow(r: VTimeEntryAny) {
+  return (
+    r.full_name ??
+    r.profile_full_name ??
+    r.contractor_name ??
+    r.user_full_name ??
+    r.name ??
+    "(no name)"
+  );
+}
+
+function getProjectNameFromRow(r: VTimeEntryAny) {
+  return (
+    r.project_name ??
+    r.project_title ??
+    r.project ??
+    r.project_display_name ??
+    "(no project)"
+  );
+}
+
 function PayrollInner() {
   const router = useRouter();
   const { loading: profLoading, userId, profile, error } = useProfile();
 
-  const defaults = useMemo(() => defaultStartEnd(), []);
-  const [startDate, setStartDate] = useState<string>(defaults.start);
-  const [endDate, setEndDate] = useState<string>(defaults.end);
+  const [preset, setPreset] = useState<DatePreset>("last_month");
+  const initial = useMemo(() => presetToRange("last_month"), []);
+  const [startDate, setStartDate] = useState<string>(initial.start);
+  const [endDate, setEndDate] = useState<string>(initial.end);
+
   const [status, setStatus] = useState<EntryStatus>("approved");
   const [projectId, setProjectId] = useState<string>("");
   const [contractorId, setContractorId] = useState<string>(""); // admin/manager only
 
   const [projects, setProjects] = useState<ProjectRow[]>([]);
-  const [rows, setRows] = useState<VTimeEntry[]>([]);
+  const [rows, setRows] = useState<VTimeEntryAny[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string>("");
   const [contractors, setContractors] = useState<Array<{ id: string; full_name: string | null }>>([]);
+
+  // Export controls
+  const [exportCurrentTableOnly, setExportCurrentTableOnly] = useState(false);
+  const [currentTable, setCurrentTable] = useState<"contractors" | "projects">("contractors");
 
   const role = profile?.role || null;
   const isAdmin = role === "admin";
@@ -94,6 +163,14 @@ function PayrollInner() {
     if (profLoading) return;
     if (!userId) router.replace("/login");
   }, [profLoading, userId, router]);
+
+  // When preset changes, update date range (except custom)
+  useEffect(() => {
+    if (preset === "custom") return;
+    const r = presetToRange(preset);
+    setStartDate(r.start);
+    setEndDate(r.end);
+  }, [preset]);
 
   // Load projects dropdown (RLS-scoped)
   useEffect(() => {
@@ -150,21 +227,10 @@ function PayrollInner() {
     setBusy(true);
     setMsg("");
     try {
+      // IMPORTANT: select("*") so we don't hard-fail on missing view columns (like full_name)
       let q = supabase
         .from("v_time_entries")
-        .select(
-          [
-            "id",
-            "user_id",
-            "entry_date",
-            "project_id",
-            "status",
-            "hours_worked",
-            "full_name",
-            "project_name",
-            "hourly_rate_snapshot",
-          ].join(",")
-        )
+        .select("*")
         .gte("entry_date", startDate)
         .lte("entry_date", endDate)
         .eq("status", status)
@@ -172,8 +238,6 @@ function PayrollInner() {
         .order("entry_date", { ascending: true });
 
       if (projectId) q = q.eq("project_id", projectId);
-
-      // Contractor should never filter another user
       if (!isContractor && contractorId) q = q.eq("user_id", contractorId);
 
       const { data, error } = await q;
@@ -183,7 +247,7 @@ function PayrollInner() {
         return;
       }
 
-      setRows(((data as any) ?? []) as VTimeEntry[]);
+      setRows(((data as any) ?? []) as VTimeEntryAny[]);
     } finally {
       setBusy(false);
     }
@@ -212,7 +276,7 @@ function PayrollInner() {
       if (!existing) {
         map.set(uid, {
           user_id: uid,
-          full_name: r.full_name || "(no name)",
+          full_name: getNameFromRow(r),
           total_hours: hours,
           first_rate: rate,
           rate_is_mixed: false,
@@ -233,7 +297,7 @@ function PayrollInner() {
 
     for (const r of rows) {
       const pid = r.project_id;
-      const name = r.project_name || "(no project)";
+      const name = getProjectNameFromRow(r);
       const hours = Number(r.hours_worked ?? 0);
       const rate = Number(r.hourly_rate_snapshot ?? 0);
       const pay = hours * rate;
@@ -249,10 +313,31 @@ function PayrollInner() {
     return Array.from(map.values()).sort((a, b) => a.project_name.localeCompare(b.project_name));
   }, [rows]);
 
+  const totalsByUser = useMemo(() => {
+    let hours = 0;
+    let pay = 0;
+    for (const r of summaryByUser) {
+      hours += r.total_hours;
+      pay += r.total_pay;
+    }
+    return { hours, pay };
+  }, [summaryByUser]);
+
+  const totalsByProject = useMemo(() => {
+    let hours = 0;
+    let pay = 0;
+    for (const r of summaryByProject) {
+      hours += r.total_hours;
+      pay += r.total_pay;
+    }
+    return { hours, pay };
+  }, [summaryByProject]);
+
   function filtersLabel() {
     const projName = projectId ? projects.find((p) => p.id === projectId)?.name : "";
     const contractorName = contractorId ? contractors.find((c) => c.id === contractorId)?.full_name : "";
     const parts = [
+      `preset=${preset}`,
       `start=${startDate}`,
       `end=${endDate}`,
       `status=${status}`,
@@ -262,9 +347,10 @@ function PayrollInner() {
     return parts.join(" | ");
   }
 
-  function exportSummaryCsv() {
+  function exportSummaryCsvBothTables() {
     const header = [
       "Report",
+      "Preset",
       "Start",
       "End",
       "Status",
@@ -285,32 +371,114 @@ function PayrollInner() {
         ? contractors.find((c) => c.id === contractorId)?.full_name || contractorId
         : "All";
 
-    const baseMeta = ["Payroll Summary", startDate, endDate, status, projName || "All", contractorName || "All", ""];
+    const baseMeta = ["Payroll Summary", preset, startDate, endDate, status, projName || "All", contractorName || "All", ""];
 
     const lines: string[] = [];
     lines.push(header.map(csvEscape).join(","));
 
     for (const r of summaryByUser) {
       lines.push(
-        [...baseMeta, "By Contractor", r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)]
+        [
+          ...baseMeta,
+          "By Contractor",
+          r.full_name,
+          r.total_hours.toFixed(2),
+          r.rate_is_mixed ? "mixed" : money(r.first_rate),
+          money(r.total_pay),
+        ]
           .map(csvEscape)
           .join(",")
       );
     }
+    lines.push(
+      [...baseMeta, "By Contractor", "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)]
+        .map(csvEscape)
+        .join(",")
+    );
 
     for (const r of summaryByProject) {
       lines.push(
-        [...baseMeta, "By Project", r.project_name, r.total_hours.toFixed(2), "", money(r.total_pay)].map(csvEscape).join(",")
+        [...baseMeta, "By Project", r.project_name, r.total_hours.toFixed(2), "", money(r.total_pay)]
+          .map(csvEscape)
+          .join(",")
       );
     }
+    lines.push(
+      [...baseMeta, "By Project", "TOTAL", totalsByProject.hours.toFixed(2), "", money(totalsByProject.pay)]
+        .map(csvEscape)
+        .join(",")
+    );
 
-    const csv = lines.join("\n");
-    const filename = `payroll_summary_${startDate}_to_${endDate}.csv`;
-    downloadCsv(filename, csv);
+    downloadCsv(`payroll_summary_${startDate}_to_${endDate}.csv`, lines.join("\n"));
+  }
+
+  function exportSummaryCsvCurrentTableOnly() {
+    const projName = projectId ? projects.find((p) => p.id === projectId)?.name : "All";
+    const contractorName = isContractor
+      ? "(self)"
+      : contractorId
+        ? contractors.find((c) => c.id === contractorId)?.full_name || contractorId
+        : "All";
+
+    if (currentTable === "contractors") {
+      const header = ["Preset", "Start", "End", "Status", "Project", "Contractor filter", "Contractor", "Hours", "Rate", "Pay"];
+      const lines: string[] = [];
+      lines.push(header.map(csvEscape).join(","));
+
+      for (const r of summaryByUser) {
+        lines.push(
+          [
+            preset,
+            startDate,
+            endDate,
+            status,
+            projName,
+            contractorName,
+            r.full_name,
+            r.total_hours.toFixed(2),
+            r.rate_is_mixed ? "mixed" : money(r.first_rate),
+            money(r.total_pay),
+          ]
+            .map(csvEscape)
+            .join(",")
+        );
+      }
+      lines.push(
+        [preset, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)]
+          .map(csvEscape)
+          .join(",")
+      );
+
+      downloadCsv(`payroll_contractors_${startDate}_to_${endDate}.csv`, lines.join("\n"));
+      return;
+    }
+
+    const header = ["Preset", "Start", "End", "Status", "Project filter", "Contractor filter", "Project", "Hours", "Pay"];
+    const lines: string[] = [];
+    lines.push(header.map(csvEscape).join(","));
+
+    for (const r of summaryByProject) {
+      lines.push(
+        [preset, startDate, endDate, status, projName, contractorName, r.project_name, r.total_hours.toFixed(2), money(r.total_pay)]
+          .map(csvEscape)
+          .join(",")
+      );
+    }
+    lines.push(
+      [preset, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByProject.hours.toFixed(2), money(totalsByProject.pay)]
+        .map(csvEscape)
+        .join(",")
+    );
+
+    downloadCsv(`payroll_projects_${startDate}_to_${endDate}.csv`, lines.join("\n"));
+  }
+
+  function exportSummaryCsv() {
+    if (exportCurrentTableOnly) return exportSummaryCsvCurrentTableOnly();
+    return exportSummaryCsvBothTables();
   }
 
   function exportDetailCsv() {
-    // Row-level export (each time entry)
     const header = [
       "entry_id",
       "entry_date",
@@ -337,9 +505,9 @@ function PayrollInner() {
           r.id,
           r.entry_date,
           r.status,
-          r.full_name || "",
+          getNameFromRow(r),
           r.user_id,
-          r.project_name || "",
+          getProjectNameFromRow(r),
           r.project_id,
           hours.toFixed(2),
           money(rate),
@@ -350,9 +518,7 @@ function PayrollInner() {
       );
     }
 
-    const csv = lines.join("\n");
-    const filename = `payroll_details_${startDate}_to_${endDate}.csv`;
-    downloadCsv(filename, csv);
+    downloadCsv(`payroll_details_${startDate}_to_${endDate}.csv`, lines.join("\n"));
   }
 
   if (profLoading) {
@@ -394,18 +560,45 @@ function PayrollInner() {
     verticalAlign: "top",
   };
 
+  const totalsRowStyle: CSSProperties = {
+    fontWeight: 900,
+    borderTop: "2px solid rgba(15, 23, 42, 0.18)",
+  };
+
   return (
     <AppShell
       title="Payroll"
       subtitle="Approved hours × snapshot rate (audit-safe)"
       right={
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <label style={{ display: "flex", gap: 8, alignItems: "center" }} className="muted">
+            <input
+              type="checkbox"
+              checked={exportCurrentTableOnly}
+              onChange={(e) => setExportCurrentTableOnly(e.target.checked)}
+              disabled={rows.length === 0 || busy}
+            />
+            Download as CSV (current table only)
+          </label>
+
+          <select
+            value={currentTable}
+            onChange={(e) => setCurrentTable(e.target.value as any)}
+            disabled={!exportCurrentTableOnly || rows.length === 0 || busy}
+            title="Choose which table exports when current-table-only is enabled"
+          >
+            <option value="contractors">Summary by Contractor</option>
+            <option value="projects">Summary by Project</option>
+          </select>
+
           <button className="btn" onClick={exportSummaryCsv} disabled={rows.length === 0 || busy} title="Download summary CSV">
             Export Summary CSV
           </button>
+
           <button className="btn" onClick={exportDetailCsv} disabled={rows.length === 0 || busy} title="Download row-level CSV">
             Export Detail CSV
           </button>
+
           <button className="btn btnPrimary" onClick={load} disabled={busy}>
             {busy ? "Loading…" : "Run Report"}
           </button>
@@ -414,18 +607,45 @@ function PayrollInner() {
     >
       <div className="card cardPad" style={{ marginBottom: 12 }}>
         <div style={controlsStyle}>
+          <div style={{ gridColumn: "span 2" }}>
+            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+              Date Range
+            </div>
+            <select value={preset} onChange={(e) => setPreset(e.target.value as DatePreset)}>
+              <option value="current_week">Current week</option>
+              <option value="last_week">Last week</option>
+              <option value="current_month">Current month</option>
+              <option value="last_month">Last month</option>
+              <option value="custom">Custom</option>
+            </select>
+          </div>
+
           <div>
             <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
               Start
             </div>
-            <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} />
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                setPreset("custom");
+                setStartDate(e.target.value);
+              }}
+            />
           </div>
 
           <div>
             <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
               End
             </div>
-            <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} />
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                setPreset("custom");
+                setEndDate(e.target.value);
+              }}
+            />
           </div>
 
           <div>
@@ -454,7 +674,7 @@ function PayrollInner() {
             </select>
           </div>
 
-          <div style={{ gridColumn: isContractor ? "span 2" : "span 1" }}>
+          <div>
             <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
               Contractor
             </div>
@@ -473,37 +693,44 @@ function PayrollInner() {
                 ))}
             </select>
           </div>
-
-          <div>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-              &nbsp;
-            </div>
-            <button
-              className="btn"
-              onClick={() => {
-                setProjectId("");
-                setContractorId("");
-                setStatus("approved");
-              }}
-              disabled={busy}
-              title="Reset filters (keeps date range)"
-            >
-              Reset
-            </button>
-          </div>
         </div>
 
-        {msg ? (
-          <div style={{ marginTop: 10, color: "#b91c1c", fontSize: 13, whiteSpace: "pre-wrap" }}>{msg}</div>
-        ) : (
-          <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-            {rows.length > 0 ? `Loaded ${rows.length} rows • ${filtersLabel()}` : "Run report to load rows."}
-          </div>
-        )}
+        <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button
+            className="btn"
+            onClick={() => {
+              setPreset("last_month");
+              const r = presetToRange("last_month");
+              setStartDate(r.start);
+              setEndDate(r.end);
+              setProjectId("");
+              setContractorId("");
+              setStatus("approved");
+            }}
+            disabled={busy}
+            title="Reset to a clean default (Last month + Approved)"
+          >
+            Reset to Default
+          </button>
+
+          {msg ? <div style={{ color: "#b91c1c", fontSize: 13, whiteSpace: "pre-wrap" }}>{msg}</div> : null}
+
+          {!msg ? (
+            <div className="muted" style={{ fontSize: 12 }}>
+              {rows.length > 0 ? `Loaded ${rows.length} rows • ${filtersLabel()}` : "Run report to load rows."}
+            </div>
+          ) : null}
+        </div>
       </div>
 
       <div className="card cardPad" style={{ marginBottom: 12 }}>
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>Summary by Contractor</div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 900 }}>Summary by Contractor</div>
+          <button className="btn" onClick={() => setCurrentTable("contractors")} title="Sets current table for current-table-only export">
+            Set as current table
+          </button>
+        </div>
+
         {summaryByUser.length === 0 ? (
           <div className="muted" style={{ fontSize: 13 }}>
             No rows for the selected filters.
@@ -528,6 +755,13 @@ function PayrollInner() {
                     <td style={{ ...cell, textAlign: "right" }}>{money(r.total_pay)}</td>
                   </tr>
                 ))}
+
+                <tr>
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "left" }}>TOTAL</td>
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{totalsByUser.hours.toFixed(2)}</td>
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }} />
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{money(totalsByUser.pay)}</td>
+                </tr>
               </tbody>
             </table>
           </div>
@@ -535,7 +769,13 @@ function PayrollInner() {
       </div>
 
       <div className="card cardPad">
-        <div style={{ fontWeight: 900, marginBottom: 10 }}>Summary by Project</div>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
+          <div style={{ fontWeight: 900 }}>Summary by Project</div>
+          <button className="btn" onClick={() => setCurrentTable("projects")} title="Sets current table for current-table-only export">
+            Set as current table
+          </button>
+        </div>
+
         {summaryByProject.length === 0 ? (
           <div className="muted" style={{ fontSize: 13 }}>
             No rows for the selected filters.
@@ -558,6 +798,12 @@ function PayrollInner() {
                     <td style={{ ...cell, textAlign: "right" }}>{money(r.total_pay)}</td>
                   </tr>
                 ))}
+
+                <tr>
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "left" }}>TOTAL</td>
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{totalsByProject.hours.toFixed(2)}</td>
+                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{money(totalsByProject.pay)}</td>
+                </tr>
               </tbody>
             </table>
           </div>

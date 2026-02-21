@@ -27,7 +27,7 @@ type TimeEntryRow = {
   mileage: number | null;
   notes: string | null;
   status: EntryStatus;
-  hours_worked?: number | null; // from view
+  hours_worked?: number | null;
 };
 
 type DraftRow = {
@@ -76,7 +76,6 @@ function TimesheetInner() {
   const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
   const isContractor = profile?.role === "contractor";
 
-  // Load projects + entries for the week
   useEffect(() => {
     if (!canView) return;
 
@@ -86,11 +85,9 @@ function TimesheetInner() {
       setLoadingWeek(true);
       setMsg("");
 
-      // ------------------------------------------------------------
       // PROJECTS (STRICT)
       // - Admin/Manager: org active projects
       // - Contractor: ONLY membership-based projects (no fallback)
-      // ------------------------------------------------------------
       try {
         if (isManagerOrAdmin) {
           const { data: projRows, error: projErr } = await supabase
@@ -105,7 +102,6 @@ function TimesheetInner() {
             setProjects((((projRows as any) ?? []) as Project[]) || []);
           }
         } else {
-          // Contractor strict membership query
           const { data: pm, error: pmErr } = await supabase
             .from("project_members")
             .select("project_id, projects:project_id (id, name, parent_id, is_active)")
@@ -121,7 +117,6 @@ function TimesheetInner() {
                 .map((x) => x.projects)
                 .filter(Boolean) as Project[];
 
-              // keep only active + unique + sorted
               const uniq = Array.from(new Map(list.map((p) => [p.id, p])).values())
                 .filter((p) => p.is_active !== false)
                 .sort((a, b) => a.name.localeCompare(b.name));
@@ -137,9 +132,7 @@ function TimesheetInner() {
         }
       }
 
-      // ------------------------------------------------------------
-      // ENTRIES (use view so we get hours_worked)
-      // ------------------------------------------------------------
+      // ENTRIES
       const { data: entryRows, error: entryErr } = await supabase
         .from("v_time_entries")
         .select("id, entry_date, project_id, time_in, time_out, lunch_hours, mileage, notes, status, hours_worked")
@@ -234,7 +227,6 @@ function TimesheetInner() {
   async function saveDraft() {
     if (!userId || !profile) return;
 
-    // Contractor must have projects assigned to save meaningful rows
     if (isContractor && projects.length === 0) {
       setMsg("No projects assigned. Ask your admin to assign projects (Profiles → Project access).");
       return;
@@ -318,7 +310,6 @@ function TimesheetInner() {
         return;
       }
 
-      // reload entries
       const { data: entryRows, error: entryErr } = await supabase
         .from("v_time_entries")
         .select("id, entry_date, project_id, time_in, time_out, lunch_hours, mileage, notes, status, hours_worked")
@@ -365,9 +356,7 @@ function TimesheetInner() {
     );
   }
 
-  if (!profile || !userId) {
-    return null; // RequireOnboarding handles redirects
-  }
+  if (!profile || !userId) return null;
 
   return (
     <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
@@ -395,7 +384,6 @@ function TimesheetInner() {
         </div>
       ) : null}
 
-      {/* Strong SaaS guidance when contractor has zero projects */}
       {isContractor && projects.length === 0 ? (
         <div style={{ marginTop: 14, padding: 14, border: "1px solid #ffd7a8", borderRadius: 14, background: "#fff7ed" }}>
           <div style={{ fontWeight: 900 }}>No projects assigned</div>
@@ -441,7 +429,7 @@ function TimesheetInner() {
 
             return (
               <section key={dayISO} style={{ marginBottom: 14, border: "1px solid #eee", borderRadius: 14, padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignContent: "baseline", gap: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
                   <div style={{ fontSize: 16, fontWeight: 900 }}>
                     {formatShort(day)} <span style={{ opacity: 0.7 }}>({dayISO})</span>
                   </div>
@@ -497,5 +485,85 @@ function TimesheetInner() {
                           ))}
                         </select>
 
-        
-::contentReference[oaicite:0]{index=0}
+                        <input
+                          value={r.time_in}
+                          disabled={locked}
+                          onChange={(e) => updateRow(r.tempId, { time_in: e.target.value })}
+                          placeholder="HH:MM"
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                        />
+
+                        <input
+                          value={r.time_out}
+                          disabled={locked}
+                          onChange={(e) => updateRow(r.tempId, { time_out: e.target.value })}
+                          placeholder="HH:MM"
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                        />
+
+                        <input
+                          value={r.lunch_hours}
+                          disabled={locked}
+                          onChange={(e) => updateRow(r.tempId, { lunch_hours: Number(e.target.value) })}
+                          type="number"
+                          min="0"
+                          step="0.25"
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                        />
+
+                        <input
+                          value={r.notes}
+                          disabled={locked}
+                          onChange={(e) => updateRow(r.tempId, { notes: e.target.value })}
+                          placeholder="What did you work on?"
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                        />
+
+                        <input
+                          value={r.mileage}
+                          disabled={locked}
+                          onChange={(e) => updateRow(r.tempId, { mileage: Number(e.target.value) })}
+                          type="number"
+                          min="0"
+                          step="0.1"
+                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
+                        />
+
+                        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
+                          <span style={{ opacity: 0.8 }}>{r.status ?? "draft"}</span>
+                          {!locked ? (
+                            <button onClick={() => removeLine(r.tempId)} style={{ padding: "6px 10px" }}>
+                              ✕
+                            </button>
+                          ) : null}
+                        </div>
+                      </div>
+                    );
+                  })}
+
+                  <div style={{ marginTop: 10 }}>
+                    <button
+                      onClick={() => addLine(dayISO)}
+                      disabled={isContractor && projects.length === 0}
+                      title={isContractor && projects.length === 0 ? "Admin must assign a project first" : "Add a new line"}
+                    >
+                      + Add line
+                    </button>
+                  </div>
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      )}
+    </main>
+  );
+}
+
+export default function TimesheetPage() {
+  return (
+    <RequireOnboarding>
+      <TimesheetInner />
+    </RequireOnboarding>
+  );
+}

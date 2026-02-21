@@ -7,6 +7,7 @@ import { supabase } from "../../lib/supabaseBrowser";
 import { useProfile } from "../../lib/useProfile";
 
 type WeekStart = "sunday" | "monday";
+type ActiveFilter = "all" | "active" | "inactive";
 
 type Project = {
   id: string;
@@ -54,6 +55,10 @@ function weekStartLabel(ws?: WeekStart | null) {
   return v === "monday" ? "Week starts Monday" : "Week starts Sunday";
 }
 
+function normalize(s: string) {
+  return s.trim().toLowerCase();
+}
+
 export default function ProjectsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -69,14 +74,18 @@ export default function ProjectsClient() {
   const [manageUser, setManageUser] = useState<SimpleProfile | null>(null);
   const [memberMap, setMemberMap] = useState<Record<string, MemberRow>>({});
 
-  // Busy states (separate so UI doesn't feel janky)
-  const [busyProjectId, setBusyProjectId] = useState<string>(""); // used for activate + assignment
-  const [savingWeekStartId, setSavingWeekStartId] = useState<string>(""); // used for week_start only
+  // Busy states
+  const [busyProjectId, setBusyProjectId] = useState<string>("");
+  const [savingWeekStartId, setSavingWeekStartId] = useState<string>("");
 
   // Admin project creation state
   const [newName, setNewName] = useState("");
   const [newWeekStart, setNewWeekStart] = useState<WeekStart>("sunday");
   const [createBusy, setCreateBusy] = useState(false);
+
+  // ✅ Step 2 controls
+  const [q, setQ] = useState("");
+  const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
 
   const isAdmin = profile?.role === "admin";
   const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
@@ -211,6 +220,32 @@ export default function ProjectsClient() {
     );
   }, [memberMap]);
 
+  // ✅ Step 2: filtered list
+  const filteredProjects = useMemo(() => {
+    const query = normalize(q);
+
+    return projects.filter((p) => {
+      if (activeFilter === "active" && !p.is_active) return false;
+      if (activeFilter === "inactive" && p.is_active) return false;
+
+      if (!query) return true;
+
+      const hay = `${p.name} ${p.id}`.toLowerCase();
+      return hay.includes(query);
+    });
+  }, [projects, q, activeFilter]);
+
+  const counts = useMemo(() => {
+    let total = projects.length;
+    let active = 0;
+    let inactive = 0;
+    for (const p of projects) {
+      if (p.is_active) active++;
+      else inactive++;
+    }
+    return { total, active, inactive };
+  }, [projects]);
+
   async function toggleAssignment(projectId: string, nextAssigned: boolean) {
     if (!profile) return;
     if (!isAdmin) return;
@@ -317,7 +352,6 @@ export default function ProjectsClient() {
     }
   }
 
-  // ✅ Step 1: Inline edit week_start (Admin only)
   async function updateProjectWeekStart(projectId: string, weekStart: WeekStart) {
     if (!profile) return;
     if (!isAdmin) return;
@@ -397,14 +431,7 @@ export default function ProjectsClient() {
     <AppShell title="Projects" subtitle={subtitle} right={headerRight}>
       {/* Error banner */}
       {fetchErr ? (
-        <div
-          className="card cardPad"
-          style={{
-            borderColor: "rgba(239,68,68,0.35)",
-            background: "rgba(239,68,68,0.06)",
-            marginBottom: 12,
-          }}
-        >
+        <div className="card cardPad" style={{ borderColor: "rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.06)", marginBottom: 12 }}>
           <div style={{ fontWeight: 900, marginBottom: 6 }}>Error</div>
           <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{fetchErr}</div>
         </div>
@@ -425,16 +452,12 @@ export default function ProjectsClient() {
 
           <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, marginTop: 12 }}>
             <div>
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-                Project name
-              </div>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Project name</div>
               <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail KPI Dashboard" />
             </div>
 
             <div>
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-                Week start
-              </div>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Week start</div>
               <select value={newWeekStart} onChange={(e) => setNewWeekStart(e.target.value as WeekStart)}>
                 <option value="sunday">Sunday</option>
                 <option value="monday">Monday</option>
@@ -450,7 +473,47 @@ export default function ProjectsClient() {
         </div>
       ) : null}
 
-      {/* Admin: manage access mode */}
+      {/* ✅ Step 2: Search + Filter bar */}
+      <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+            <div style={{ minWidth: 260 }}>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Search</div>
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or ID…" />
+            </div>
+
+            <div style={{ minWidth: 180 }}>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Status</div>
+              <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value as ActiveFilter)}>
+                <option value="all">All</option>
+                <option value="active">Active only</option>
+                <option value="inactive">Inactive only</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+              <button className="btn" onClick={() => { setQ(""); setActiveFilter("all"); }}>
+                Clear
+              </button>
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
+            <Badge>Total: {counts.total}</Badge>
+            <Badge>Active: {counts.active}</Badge>
+            <Badge>Inactive: {counts.inactive}</Badge>
+            <Badge>Showing: {filteredProjects.length}</Badge>
+          </div>
+        </div>
+
+        {q || activeFilter !== "all" ? (
+          <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+            Filters apply to both the list and access-mode project picker.
+          </div>
+        ) : null}
+      </div>
+
+      {/* Admin: manage access mode (filtered) */}
       {isAdmin && manageUserId ? (
         <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -464,14 +527,14 @@ export default function ProjectsClient() {
           </div>
 
           <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Toggle projects to grant access. Inactive projects can still be assigned, but typically should stay off.
+            Toggle projects to grant access. Use Search + Status filters above.
           </div>
 
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            {projects.length === 0 ? (
-              <div className="muted">No projects found in this org.</div>
+            {filteredProjects.length === 0 ? (
+              <div className="muted">No projects match your filters.</div>
             ) : (
-              projects.map((p) => {
+              filteredProjects.map((p) => {
                 const assigned = assignedProjectIds.has(p.id);
                 const busy = busyProjectId === p.id;
 
@@ -505,9 +568,7 @@ export default function ProjectsClient() {
                           {!p.is_active ? <Badge>Inactive</Badge> : null}
                           <Badge>{weekStartLabel(p.week_start)}</Badge>
                         </div>
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                          {p.id}
-                        </div>
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{p.id}</div>
                       </div>
                     </div>
 
@@ -522,25 +583,25 @@ export default function ProjectsClient() {
         </div>
       ) : null}
 
-      {/* Project list */}
+      {/* Projects list (filtered) */}
       <div className="card cardPad" style={{ maxWidth: 1100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 950, fontSize: 16 }}>All projects</div>
             <div className="muted" style={{ marginTop: 6 }}>
-              {manageUserId ? "Select projects above to assign access." : "Use People → Project access to assign projects to contractors."}
+              {manageUserId ? "Assign access above." : "Use People → Project access to assign projects to contractors."}
             </div>
           </div>
-          <Badge>{projects.length} total</Badge>
+          <Badge>Showing {filteredProjects.length}</Badge>
         </div>
 
-        {projects.length === 0 ? (
+        {filteredProjects.length === 0 ? (
           <div className="muted" style={{ marginTop: 12 }}>
-            No projects found.
+            No projects match your filters.
           </div>
         ) : (
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
-            {projects.map((p) => {
+            {filteredProjects.map((p) => {
               const busy = busyProjectId === p.id;
               const savingWs = savingWeekStartId === p.id;
 
@@ -565,37 +626,27 @@ export default function ProjectsClient() {
                       {!p.is_active ? <Badge>Inactive</Badge> : null}
                       <Badge>{weekStartLabel(p.week_start)}</Badge>
                     </div>
-                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
-                      {p.id}
-                    </div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{p.id}</div>
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    {/* ✅ Admin inline week start editor */}
                     {isAdmin ? (
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span className="muted" style={{ fontSize: 12, fontWeight: 800 }}>
-                          Week start
-                        </span>
+                        <span className="muted" style={{ fontSize: 12, fontWeight: 800 }}>Week start</span>
                         <select
                           value={(p.week_start || "sunday") as WeekStart}
                           disabled={savingWs}
                           onChange={(e) => updateProjectWeekStart(p.id, e.target.value as WeekStart)}
-                          title="Changes how weekly reports/timesheets calculate week boundaries"
                           style={{ minWidth: 130 }}
                         >
                           <option value="sunday">Sunday</option>
                           <option value="monday">Monday</option>
                         </select>
-                        <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
-                          {savingWs ? "Saving…" : ""}
-                        </span>
+                        <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>{savingWs ? "Saving…" : ""}</span>
                       </div>
                     ) : null}
 
-                    <button className="btn" onClick={() => setProjectInUrl(p.id)}>
-                      Select
-                    </button>
+                    <button className="btn" onClick={() => setProjectInUrl(p.id)}>Select</button>
 
                     {isAdmin ? (
                       <button className="btn" disabled={busy} onClick={() => toggleProjectActive(p.id, !p.is_active)}>
@@ -611,12 +662,10 @@ export default function ProjectsClient() {
 
         {/* Selected project control */}
         <div style={{ marginTop: 16 }}>
-          <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
-            Selected project
-          </div>
+          <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Selected project</div>
           <select value={selectedProjectId} onChange={(e) => setProjectInUrl(e.target.value)} style={{ maxWidth: 520 }}>
             <option value="">— Select a project —</option>
-            {projects.map((p) => (
+            {filteredProjects.map((p) => (
               <option key={p.id} value={p.id}>
                 {p.name}
                 {p.is_active ? "" : " (inactive)"}

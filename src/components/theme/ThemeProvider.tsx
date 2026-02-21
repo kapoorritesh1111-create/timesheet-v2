@@ -7,7 +7,7 @@ import { supabase } from "../../lib/supabaseBrowser";
 export type Density = "comfortable" | "compact";
 
 export type ThemePrefs = {
-  accent?: string;   // e.g. "#3b82f6"
+  accent?: string;   // e.g. "#2563eb"
   radius?: number;   // px
   density?: Density; // comfortable/compact
 };
@@ -33,21 +33,28 @@ function clamp(n: number, min: number, max: number) {
 
 export default function ThemeProvider({ children }: { children: React.ReactNode }) {
   const { profile } = useProfile();
+
+  // NOTE: Profile TS type may not include ui_prefs yet; treat as any to avoid build failures.
+  const profileAny = profile as any;
+
   const [prefs, setPrefs] = useState<Required<ThemePrefs>>(DEFAULT_PREFS);
 
   // Load prefs: profile.ui_prefs wins; otherwise localStorage; otherwise default
   useEffect(() => {
-    const fromProfile = (profile?.ui_prefs as ThemePrefs | undefined) || null;
+    const fromProfile = (profileAny?.ui_prefs as ThemePrefs | undefined) || null;
     const fromLocal = safeParse(localStorage.getItem("ts_theme_prefs")) as ThemePrefs | null;
 
     const merged: Required<ThemePrefs> = {
-      accent: (fromProfile?.accent || fromLocal?.accent || DEFAULT_PREFS.accent),
+      accent: fromProfile?.accent || fromLocal?.accent || DEFAULT_PREFS.accent,
       radius: clamp(Number(fromProfile?.radius ?? fromLocal?.radius ?? DEFAULT_PREFS.radius), 6, 20),
-      density: ((fromProfile?.density || fromLocal?.density || DEFAULT_PREFS.density) as any) === "compact" ? "compact" : "comfortable",
+      density:
+        ((fromProfile?.density || fromLocal?.density || DEFAULT_PREFS.density) as any) === "compact"
+          ? "compact"
+          : "comfortable",
     };
 
     setPrefs(merged);
-  }, [profile?.id]); // reload on user change
+  }, [profileAny?.id]);
 
   // Apply CSS variables
   useEffect(() => {
@@ -76,19 +83,16 @@ export default function ThemeProvider({ children }: { children: React.ReactNode 
         const merged: Required<ThemePrefs> = {
           accent: next.accent || prefs.accent,
           radius: clamp(Number(next.radius ?? prefs.radius), 6, 20),
-          density: (next.density === "compact" ? "compact" : "comfortable"),
+          density: next.density === "compact" ? "compact" : "comfortable",
         };
 
-        // Always save locally immediately
+        // Save locally immediately
         localStorage.setItem("ts_theme_prefs", JSON.stringify(merged));
         setPrefs(merged);
 
         // Persist to profile if logged in
-        if (profile?.id) {
-          await supabase
-            .from("profiles")
-            .update({ ui_prefs: merged })
-            .eq("id", profile.id);
+        if (profileAny?.id) {
+          await supabase.from("profiles").update({ ui_prefs: merged }).eq("id", profileAny.id);
         }
       },
       reset() {
@@ -96,9 +100,9 @@ export default function ThemeProvider({ children }: { children: React.ReactNode 
         setPrefs(DEFAULT_PREFS);
       },
     };
-  }, [prefs, profile?.id]);
+  }, [prefs, profileAny?.id]);
 
-  // Provide a simple global handle (optional but convenient)
+  // Convenience global handle (optional)
   // @ts-ignore
   if (typeof window !== "undefined") window.__TS_THEME__ = api;
 

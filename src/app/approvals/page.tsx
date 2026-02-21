@@ -1,6 +1,7 @@
 // src/app/approvals/page.tsx
 "use client";
 
+import RequireOnboarding from "../../components/auth/RequireOnboarding";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseBrowser";
@@ -31,7 +32,7 @@ type Group = {
   entries: EntryRow[];
 };
 
-export default function ApprovalsPage() {
+function ApprovalsInner() {
   const router = useRouter();
   const { loading: profLoading, profile, userId } = useProfile();
 
@@ -175,7 +176,9 @@ export default function ApprovalsPage() {
         return;
       }
 
-      setEntries((prev) => prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end)));
+      setEntries((prev) =>
+        prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end))
+      );
       setMsg("Approved ✅");
     } finally {
       setBusyKey("");
@@ -200,7 +203,9 @@ export default function ApprovalsPage() {
         return;
       }
 
-      setEntries((prev) => prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end)));
+      setEntries((prev) =>
+        prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end))
+      );
       setMsg("Rejected (sent back editable) ✅");
     } finally {
       setBusyKey("");
@@ -323,5 +328,13 @@ export default function ApprovalsPage() {
         )}
       </div>
     </main>
+  );
+}
+
+export default function ApprovalsPage() {
+  return (
+    <RequireOnboarding>
+      <ApprovalsInner />
+    </RequireOnboarding>
   );
 }

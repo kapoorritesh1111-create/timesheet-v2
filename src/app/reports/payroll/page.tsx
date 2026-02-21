@@ -1,4 +1,3 @@
-// src/app/reports/payroll/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -48,6 +47,25 @@ function defaultStartEnd() {
 
 function money(x: number) {
   return x.toFixed(2);
+}
+
+function csvEscape(value: unknown) {
+  const s = value === null || value === undefined ? "" : String(value);
+  const needsQuotes = /[",\n\r]/.test(s);
+  const escaped = s.replace(/"/g, '""');
+  return needsQuotes ? `"${escaped}"` : escaped;
+}
+
+function downloadCsv(filename: string, csv: string) {
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }
 
 function PayrollInner() {
@@ -231,6 +249,112 @@ function PayrollInner() {
     return Array.from(map.values()).sort((a, b) => a.project_name.localeCompare(b.project_name));
   }, [rows]);
 
+  function filtersLabel() {
+    const projName = projectId ? projects.find((p) => p.id === projectId)?.name : "";
+    const contractorName = contractorId ? contractors.find((c) => c.id === contractorId)?.full_name : "";
+    const parts = [
+      `start=${startDate}`,
+      `end=${endDate}`,
+      `status=${status}`,
+      `project=${projName || (projectId ? projectId : "All")}`,
+      `contractor=${isContractor ? "(self)" : contractorName || (contractorId ? contractorId : "All")}`,
+    ];
+    return parts.join(" | ");
+  }
+
+  function exportSummaryCsv() {
+    const header = [
+      "Report",
+      "Start",
+      "End",
+      "Status",
+      "Project",
+      "Contractor",
+      "",
+      "Section",
+      "Name",
+      "Hours",
+      "Rate",
+      "Pay",
+    ];
+
+    const projName = projectId ? projects.find((p) => p.id === projectId)?.name : "All";
+    const contractorName = isContractor
+      ? "(self)"
+      : contractorId
+        ? contractors.find((c) => c.id === contractorId)?.full_name || contractorId
+        : "All";
+
+    const baseMeta = ["Payroll Summary", startDate, endDate, status, projName || "All", contractorName || "All", ""];
+
+    const lines: string[] = [];
+    lines.push(header.map(csvEscape).join(","));
+
+    for (const r of summaryByUser) {
+      lines.push(
+        [...baseMeta, "By Contractor", r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)]
+          .map(csvEscape)
+          .join(",")
+      );
+    }
+
+    for (const r of summaryByProject) {
+      lines.push(
+        [...baseMeta, "By Project", r.project_name, r.total_hours.toFixed(2), "", money(r.total_pay)].map(csvEscape).join(",")
+      );
+    }
+
+    const csv = lines.join("\n");
+    const filename = `payroll_summary_${startDate}_to_${endDate}.csv`;
+    downloadCsv(filename, csv);
+  }
+
+  function exportDetailCsv() {
+    // Row-level export (each time entry)
+    const header = [
+      "entry_id",
+      "entry_date",
+      "status",
+      "contractor",
+      "user_id",
+      "project",
+      "project_id",
+      "hours",
+      "hourly_rate_snapshot",
+      "pay",
+    ];
+
+    const lines: string[] = [];
+    lines.push(header.map(csvEscape).join(","));
+
+    for (const r of rows) {
+      const hours = Number(r.hours_worked ?? 0);
+      const rate = Number(r.hourly_rate_snapshot ?? 0);
+      const pay = hours * rate;
+
+      lines.push(
+        [
+          r.id,
+          r.entry_date,
+          r.status,
+          r.full_name || "",
+          r.user_id,
+          r.project_name || "",
+          r.project_id,
+          hours.toFixed(2),
+          money(rate),
+          money(pay),
+        ]
+          .map(csvEscape)
+          .join(",")
+      );
+    }
+
+    const csv = lines.join("\n");
+    const filename = `payroll_details_${startDate}_to_${endDate}.csv`;
+    downloadCsv(filename, csv);
+  }
+
   if (profLoading) {
     return (
       <AppShell title="Payroll">
@@ -275,9 +399,17 @@ function PayrollInner() {
       title="Payroll"
       subtitle="Approved hours × snapshot rate (audit-safe)"
       right={
-        <button className="btn btnPrimary" onClick={load} disabled={busy}>
-          {busy ? "Loading…" : "Run Report"}
-        </button>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <button className="btn" onClick={exportSummaryCsv} disabled={rows.length === 0 || busy} title="Download summary CSV">
+            Export Summary CSV
+          </button>
+          <button className="btn" onClick={exportDetailCsv} disabled={rows.length === 0 || busy} title="Download row-level CSV">
+            Export Detail CSV
+          </button>
+          <button className="btn btnPrimary" onClick={load} disabled={busy}>
+            {busy ? "Loading…" : "Run Report"}
+          </button>
+        </div>
       }
     >
       <div className="card cardPad" style={{ marginBottom: 12 }}>
@@ -354,6 +486,7 @@ function PayrollInner() {
                 setStatus("approved");
               }}
               disabled={busy}
+              title="Reset filters (keeps date range)"
             >
               Reset
             </button>
@@ -362,7 +495,11 @@ function PayrollInner() {
 
         {msg ? (
           <div style={{ marginTop: 10, color: "#b91c1c", fontSize: 13, whiteSpace: "pre-wrap" }}>{msg}</div>
-        ) : null}
+        ) : (
+          <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
+            {rows.length > 0 ? `Loaded ${rows.length} rows • ${filtersLabel()}` : "Run report to load rows."}
+          </div>
+        )}
       </div>
 
       <div className="card cardPad" style={{ marginBottom: 12 }}>

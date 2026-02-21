@@ -163,30 +163,20 @@ function ProfilesInner() {
 
         {visibleRows.map((r) => {
           const isSelf = r.id === userId;
-
-          // ✅ EDIT RULES
-          // - Admin: can edit everything except we keep role change restricted below
-          // - Manager: can edit direct reports (and self name), but not role changes
-          // - Contractor: can edit self name only (not hourly_rate)
           const isDirectReport = r.manager_id === userId;
 
           const canEditRow =
             isAdmin ||
             (isManager && (isSelf || isDirectReport)) ||
-            (r.id === userId); // contractor self
+            isSelf; // contractor self (name only; rate handled below)
 
           const canAssignManager = isAdmin && r.role === "contractor";
           const canChangeRole = isAdmin && r.role !== "admin";
 
-          // ✅ Hourly rate can be edited by:
-          // - Admin for any contractor
-          // - Manager for direct-report contractors
-          const canEditHourlyRate =
-            (isAdmin && r.role === "contractor") ||
-            (isManager && isDirectReport && r.role === "contractor");
-
-          // Contractors should not self-edit rate
-          const hourlyRateDisabled = !canEditHourlyRate;
+          // ✅ Hourly rate rules:
+          // - Admin can edit anyone (including themselves)
+          // - Manager can edit direct reports
+          const canEditHourlyRate = isAdmin || (isManager && isDirectReport);
 
           return (
             <div
@@ -255,7 +245,7 @@ function ProfilesInner() {
                 step="0.01"
                 min="0"
                 value={Number(r.hourly_rate ?? 0)}
-                disabled={hourlyRateDisabled}
+                disabled={!canEditHourlyRate}
                 onChange={(e) =>
                   setRows((prev) =>
                     prev.map((x) => (x.id === r.id ? { ...x, hourly_rate: Number(e.target.value) } : x))
@@ -265,7 +255,7 @@ function ProfilesInner() {
                   padding: 10,
                   borderRadius: 10,
                   border: "1px solid #ddd",
-                  background: !hourlyRateDisabled ? "#fff" : "#f6f6f6",
+                  background: canEditHourlyRate ? "#fff" : "#f6f6f6",
                 }}
               />
 
@@ -301,7 +291,8 @@ function ProfilesInner() {
                       full_name: r.full_name || null,
                       role: r.role,
                       manager_id: r.manager_id,
-                      hourly_rate: r.role === "contractor" ? Number(r.hourly_rate ?? 0) : null,
+                      // ✅ Always persist hourly_rate as a number (admin wants it for everyone including self)
+                      hourly_rate: Number(r.hourly_rate ?? 0),
                       is_active: r.is_active !== false,
                     })
                   }

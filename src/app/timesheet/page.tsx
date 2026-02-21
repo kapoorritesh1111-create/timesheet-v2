@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import RequireOnboarding from "../../components/auth/RequireOnboarding";
 import { supabase } from "../../lib/supabaseBrowser";
 import { useProfile } from "../../lib/useProfile";
 import { addDays, formatShort, startOfWeekSunday, toISODate, weekRangeLabel } from "../../lib/date";
@@ -20,7 +21,7 @@ type TimeEntryRow = {
   id: string;
   entry_date: string; // YYYY-MM-DD
   project_id: string;
-  time_in: string | null;   // "HH:MM:SS" from Postgres time
+  time_in: string | null; // "HH:MM:SS" from Postgres time
   time_out: string | null;
   lunch_hours: number | null;
   mileage: number | null;
@@ -34,8 +35,8 @@ type DraftRow = {
   tempId: string;
   entry_date: string;
   project_id: string;
-  time_in: string;   // "HH:MM"
-  time_out: string;  // "HH:MM"
+  time_in: string; // "HH:MM"
+  time_out: string; // "HH:MM"
   lunch_hours: number;
   mileage: number;
   notes: string;
@@ -55,7 +56,7 @@ function normalizeHHMM(s: string): string {
   return `${h}:${m}`;
 }
 
-export default function TimesheetPage() {
+function TimesheetInner() {
   const router = useRouter();
   const { loading: profLoading, profile, userId } = useProfile();
 
@@ -327,6 +328,7 @@ export default function TimesheetPage() {
   }
 
   if (!profile || !userId) {
+    // RequireOnboarding should normally handle this; keep as a safety net.
     return (
       <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
         <h1 style={{ margin: 0 }}>Timesheet</h1>
@@ -404,7 +406,15 @@ export default function TimesheetPage() {
                 </div>
 
                 <div style={{ marginTop: 10 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "220px 90px 90px 90px 1fr 90px 90px", gap: 8, fontWeight: 800, opacity: 0.8 }}>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "220px 90px 90px 90px 1fr 90px 90px",
+                      gap: 8,
+                      fontWeight: 800,
+                      opacity: 0.8,
+                    }}
+                  >
                     <div>Project</div>
                     <div>In</div>
                     <div>Out</div>
@@ -510,5 +520,13 @@ export default function TimesheetPage() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function TimesheetPage() {
+  return (
+    <RequireOnboarding>
+      <TimesheetInner />
+    </RequireOnboarding>
   );
 }

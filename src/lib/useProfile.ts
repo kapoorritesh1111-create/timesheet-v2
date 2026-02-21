@@ -8,18 +8,40 @@ export type Role = "admin" | "manager" | "contractor";
 
 export type Profile = {
   id: string;
-  org_id: string;
+  org_id: string | null;
   role: Role;
   full_name: string | null;
   hourly_rate: number | null;
   is_active: boolean | null;
   manager_id: string | null;
+
+  // Professional profile fields (current DB baseline)
+  phone: string | null;
+  address: string | null;
+  avatar_url: string | null;
+
+  // Onboarding flag
+  onboarding_completed_at: string | null;
 };
 
 async function fetchMyProfile(uid: string) {
   return await supabase
     .from("profiles")
-    .select("id, org_id, role, full_name, hourly_rate, is_active, manager_id")
+    .select(
+      [
+        "id",
+        "org_id",
+        "role",
+        "full_name",
+        "hourly_rate",
+        "is_active",
+        "manager_id",
+        "phone",
+        "address",
+        "avatar_url",
+        "onboarding_completed_at",
+      ].join(", ")
+    )
     .eq("id", uid)
     .maybeSingle();
 }
@@ -80,10 +102,8 @@ export function useProfile() {
       setLoading(false);
     }
 
-    // Initial load
     hydrate();
 
-    // Re-hydrate on any auth change (login/logout, invite, recovery)
     const { data: sub } = supabase.auth.onAuthStateChange(() => {
       hydrate();
     });

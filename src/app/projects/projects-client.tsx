@@ -68,7 +68,10 @@ export default function ProjectsClient() {
   // Assignment UI state (Admin only)
   const [manageUser, setManageUser] = useState<SimpleProfile | null>(null);
   const [memberMap, setMemberMap] = useState<Record<string, MemberRow>>({});
-  const [busyProjectId, setBusyProjectId] = useState<string>("");
+
+  // Busy states (separate so UI doesn't feel janky)
+  const [busyProjectId, setBusyProjectId] = useState<string>(""); // used for activate + assignment
+  const [savingWeekStartId, setSavingWeekStartId] = useState<string>(""); // used for week_start only
 
   // Admin project creation state
   const [newName, setNewName] = useState("");
@@ -88,8 +91,6 @@ export default function ProjectsClient() {
     if (!profile) return;
     setFetchErr("");
 
-    // Admin/Manager: show org projects
-    // Contractor: membership-driven projects
     if (isManagerOrAdmin) {
       const { data, error } = await supabase
         .from("projects")
@@ -121,7 +122,6 @@ export default function ProjectsClient() {
     }
   }
 
-  // Load projects list
   useEffect(() => {
     if (loading) return;
 
@@ -238,7 +238,7 @@ export default function ProjectsClient() {
           org_id: profile.org_id,
           project_id: projectId,
           profile_id: manageUserId,
-          user_id: manageUserId, // compatibility with current schema
+          user_id: manageUserId,
           is_active: true,
         };
 
@@ -276,7 +276,7 @@ export default function ProjectsClient() {
         org_id: profile.org_id,
         name,
         is_active: true,
-        week_start: newWeekStart, // ✅ per-project week start (default sunday)
+        week_start: newWeekStart,
       });
 
       if (error) {
@@ -314,6 +314,32 @@ export default function ProjectsClient() {
       setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, is_active: nextActive } : p)));
     } finally {
       setBusyProjectId("");
+    }
+  }
+
+  // ✅ Step 1: Inline edit week_start (Admin only)
+  async function updateProjectWeekStart(projectId: string, weekStart: WeekStart) {
+    if (!profile) return;
+    if (!isAdmin) return;
+
+    setSavingWeekStartId(projectId);
+    setFetchErr("");
+
+    try {
+      const { error } = await supabase
+        .from("projects")
+        .update({ week_start: weekStart })
+        .eq("id", projectId)
+        .eq("org_id", profile.org_id);
+
+      if (error) {
+        setFetchErr(error.message);
+        return;
+      }
+
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, week_start: weekStart } : p)));
+    } finally {
+      setSavingWeekStartId("");
     }
   }
 
@@ -365,15 +391,20 @@ export default function ProjectsClient() {
     </div>
   );
 
-  const subtitle = manageUserId
-    ? "Assign project access to a user"
-    : "Create projects, activate/deactivate, and manage access";
+  const subtitle = manageUserId ? "Assign project access to a user" : "Create projects, activate/deactivate, and manage access";
 
   return (
     <AppShell title="Projects" subtitle={subtitle} right={headerRight}>
       {/* Error banner */}
       {fetchErr ? (
-        <div className="card cardPad" style={{ borderColor: "rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.06)", marginBottom: 12 }}>
+        <div
+          className="card cardPad"
+          style={{
+            borderColor: "rgba(239,68,68,0.35)",
+            background: "rgba(239,68,68,0.06)",
+            marginBottom: 12,
+          }}
+        >
           <div style={{ fontWeight: 900, marginBottom: 6 }}>Error</div>
           <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{fetchErr}</div>
         </div>
@@ -397,11 +428,7 @@ export default function ProjectsClient() {
               <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
                 Project name
               </div>
-              <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                placeholder="e.g. Retail KPI Dashboard"
-              />
+              <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail KPI Dashboard" />
             </div>
 
             <div>
@@ -415,12 +442,7 @@ export default function ProjectsClient() {
             </div>
 
             <div style={{ display: "flex", alignItems: "end" }}>
-              <button
-                className="btn btnPrimary"
-                onClick={createProject}
-                disabled={createBusy || newName.trim().length < 2}
-                title="Creates the project in this org"
-              >
+              <button className="btn btnPrimary" onClick={createProject} disabled={createBusy || newName.trim().length < 2}>
                 {createBusy ? "Creating…" : "Create"}
               </button>
             </div>
@@ -456,17 +478,17 @@ export default function ProjectsClient() {
                 return (
                   <div
                     key={p.id}
-                    className="card"
                     style={{
                       padding: 12,
-                      borderRadius: 14,
                       border: "1px solid rgba(15,23,42,0.08)",
+                      borderRadius: 14,
                       background: p.is_active ? "white" : "rgba(15,23,42,0.02)",
-                      opacity: p.is_active ? 1 : 0.8,
+                      opacity: p.is_active ? 1 : 0.85,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: 12,
+                      flexWrap: "wrap",
                     }}
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
@@ -520,6 +542,7 @@ export default function ProjectsClient() {
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {projects.map((p) => {
               const busy = busyProjectId === p.id;
+              const savingWs = savingWeekStartId === p.id;
 
               return (
                 <div
@@ -548,17 +571,34 @@ export default function ProjectsClient() {
                   </div>
 
                   <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    {/* ✅ Admin inline week start editor */}
+                    {isAdmin ? (
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <span className="muted" style={{ fontSize: 12, fontWeight: 800 }}>
+                          Week start
+                        </span>
+                        <select
+                          value={(p.week_start || "sunday") as WeekStart}
+                          disabled={savingWs}
+                          onChange={(e) => updateProjectWeekStart(p.id, e.target.value as WeekStart)}
+                          title="Changes how weekly reports/timesheets calculate week boundaries"
+                          style={{ minWidth: 130 }}
+                        >
+                          <option value="sunday">Sunday</option>
+                          <option value="monday">Monday</option>
+                        </select>
+                        <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>
+                          {savingWs ? "Saving…" : ""}
+                        </span>
+                      </div>
+                    ) : null}
+
                     <button className="btn" onClick={() => setProjectInUrl(p.id)}>
                       Select
                     </button>
 
                     {isAdmin ? (
-                      <button
-                        className="btn"
-                        disabled={busy}
-                        onClick={() => toggleProjectActive(p.id, !p.is_active)}
-                        title="Enable/disable this project"
-                      >
+                      <button className="btn" disabled={busy} onClick={() => toggleProjectActive(p.id, !p.is_active)}>
                         {busy ? "Working…" : p.is_active ? "Deactivate" : "Activate"}
                       </button>
                     ) : null}
@@ -586,7 +626,7 @@ export default function ProjectsClient() {
 
           {selectedProjectId ? (
             <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-              Tip: Project selection influences report week boundaries when a project has a custom week start.
+              Tip: When a project is selected, reports can snap week ranges to that project’s week start.
             </div>
           ) : null}
         </div>

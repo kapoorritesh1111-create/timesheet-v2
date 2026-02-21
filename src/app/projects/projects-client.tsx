@@ -1,16 +1,19 @@
-// src/app/projects/projects-client.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import AppShell from "../../components/layout/AppShell";
 import { supabase } from "../../lib/supabaseBrowser";
 import { useProfile } from "../../lib/useProfile";
+
+type WeekStart = "sunday" | "monday";
 
 type Project = {
   id: string;
   name: string;
   is_active: boolean;
   org_id: string;
+  week_start?: WeekStart | null;
 };
 
 type MemberRow = {
@@ -25,26 +28,51 @@ type SimpleProfile = {
   role: string | null;
 };
 
+function Badge({ children }: { children: React.ReactNode }) {
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "4px 10px",
+        borderRadius: 999,
+        border: "1px solid rgba(15,23,42,0.10)",
+        background: "rgba(255,255,255,0.9)",
+        fontSize: 12,
+        fontWeight: 700,
+        color: "rgba(15,23,42,0.75)",
+      }}
+    >
+      {children}
+    </span>
+  );
+}
+
+function weekStartLabel(ws?: WeekStart | null) {
+  const v = ws || "sunday";
+  return v === "monday" ? "Week starts Monday" : "Week starts Sunday";
+}
+
 export default function ProjectsClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { loading, userId, profile, error: profErr } = useProfile();
 
   const selectedProjectId = useMemo(() => searchParams.get("project") || "", [searchParams]);
-
-  // project assignment mode
   const manageUserId = useMemo(() => searchParams.get("user") || "", [searchParams]);
 
   const [projects, setProjects] = useState<Project[]>([]);
   const [fetchErr, setFetchErr] = useState<string>("");
 
-  // Assignment UI state
+  // Assignment UI state (Admin only)
   const [manageUser, setManageUser] = useState<SimpleProfile | null>(null);
   const [memberMap, setMemberMap] = useState<Record<string, MemberRow>>({});
   const [busyProjectId, setBusyProjectId] = useState<string>("");
 
   // Admin project creation state
   const [newName, setNewName] = useState("");
+  const [newWeekStart, setNewWeekStart] = useState<WeekStart>("sunday");
   const [createBusy, setCreateBusy] = useState(false);
 
   const isAdmin = profile?.role === "admin";
@@ -58,7 +86,6 @@ export default function ProjectsClient() {
 
   async function reloadProjects() {
     if (!profile) return;
-
     setFetchErr("");
 
     // Admin/Manager: show org projects
@@ -66,7 +93,7 @@ export default function ProjectsClient() {
     if (isManagerOrAdmin) {
       const { data, error } = await supabase
         .from("projects")
-        .select("id, name, is_active, org_id")
+        .select("id, name, is_active, org_id, week_start")
         .eq("org_id", profile.org_id)
         .order("name", { ascending: true });
 
@@ -78,7 +105,7 @@ export default function ProjectsClient() {
     } else {
       const { data, error } = await supabase
         .from("project_members")
-        .select("project_id, projects:project_id (id, name, is_active, org_id)")
+        .select("project_id, projects:project_id (id, name, is_active, org_id, week_start)")
         .eq("profile_id", profile.id)
         .eq("is_active", true);
 
@@ -196,11 +223,7 @@ export default function ProjectsClient() {
       const existing = memberMap[projectId];
 
       if (existing) {
-        const { error } = await supabase
-          .from("project_members")
-          .update({ is_active: nextAssigned })
-          .eq("id", existing.id);
-
+        const { error } = await supabase.from("project_members").update({ is_active: nextAssigned }).eq("id", existing.id);
         if (error) {
           setFetchErr(error.message);
           return;
@@ -215,16 +238,11 @@ export default function ProjectsClient() {
           org_id: profile.org_id,
           project_id: projectId,
           profile_id: manageUserId,
-          user_id: manageUserId, // compatibility with your current schema
+          user_id: manageUserId, // compatibility with current schema
           is_active: true,
         };
 
-        const { data, error } = await supabase
-          .from("project_members")
-          .insert(payload)
-          .select("id, project_id, is_active")
-          .single();
-
+        const { data, error } = await supabase.from("project_members").insert(payload).select("id, project_id, is_active").single();
         if (error) {
           setFetchErr(error.message);
           return;
@@ -258,6 +276,7 @@ export default function ProjectsClient() {
         org_id: profile.org_id,
         name,
         is_active: true,
+        week_start: newWeekStart, // ✅ per-project week start (default sunday)
       });
 
       if (error) {
@@ -266,6 +285,7 @@ export default function ProjectsClient() {
       }
 
       setNewName("");
+      setNewWeekStart("sunday");
       await reloadProjects();
     } finally {
       setCreateBusy(false);
@@ -297,105 +317,159 @@ export default function ProjectsClient() {
     }
   }
 
+  // ---- UI guards ----
+  if (loading) {
+    return (
+      <AppShell title="Projects" subtitle="Create projects and manage access">
+        <div className="card cardPad">Loading…</div>
+      </AppShell>
+    );
+  }
+
+  if (!userId) {
+    return (
+      <AppShell title="Projects" subtitle="Create projects and manage access">
+        <div className="card cardPad">
+          <div style={{ fontWeight: 900, marginBottom: 8 }}>Please log in.</div>
+          <button className="btn btnPrimary" onClick={() => router.push("/login")}>
+            Go to Login
+          </button>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (!profile) {
+    return (
+      <AppShell title="Projects" subtitle="Create projects and manage access">
+        <div className="card cardPad">
+          <div style={{ fontWeight: 900 }}>Logged in, but profile could not be loaded.</div>
+          <pre style={{ whiteSpace: "pre-wrap", marginTop: 10 }}>{profErr || "No details."}</pre>
+        </div>
+      </AppShell>
+    );
+  }
+
+  const headerRight = (
+    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+      {manageUserId ? (
+        <>
+          <button className="btn" onClick={() => router.push("/profiles")}>
+            Back to People
+          </button>
+          <button className="btn" onClick={() => router.replace("/projects")}>
+            Exit Access Mode
+          </button>
+        </>
+      ) : null}
+    </div>
+  );
+
+  const subtitle = manageUserId
+    ? "Assign project access to a user"
+    : "Create projects, activate/deactivate, and manage access";
+
   return (
-    <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-      <h1 style={{ margin: 0 }}>Projects</h1>
-
-      {loading && <p style={{ marginTop: 10 }}>Loading…</p>}
-
-      {!loading && !userId && (
-        <div style={{ marginTop: 12 }}>
-          <p>Please log in.</p>
-          <button onClick={() => router.push("/login")}>Go to Login</button>
+    <AppShell title="Projects" subtitle={subtitle} right={headerRight}>
+      {/* Error banner */}
+      {fetchErr ? (
+        <div className="card cardPad" style={{ borderColor: "rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.06)", marginBottom: 12 }}>
+          <div style={{ fontWeight: 900, marginBottom: 6 }}>Error</div>
+          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{fetchErr}</div>
         </div>
-      )}
-
-      {!loading && userId && !profile && (
-        <div style={{ marginTop: 12, padding: 12, border: "1px solid #eee", borderRadius: 10 }}>
-          <div style={{ fontWeight: 800 }}>Logged in, but profile could not be loaded.</div>
-          <pre style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{profErr || "No details."}</pre>
-        </div>
-      )}
-
-      {!!fetchErr && (
-        <div style={{ marginTop: 12, padding: 12, border: "1px solid #f3c", borderRadius: 10 }}>
-          <div style={{ fontWeight: 800 }}>Error</div>
-          <pre style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{fetchErr}</pre>
-        </div>
-      )}
-
-      {!!profile && (
-        <div style={{ marginTop: 12, opacity: 0.85 }}>
-          Role: <b>{profile.role}</b> &nbsp;|&nbsp; Org: <code>{profile.org_id}</code>
-        </div>
-      )}
-
-      {/* Admin: Create project */}
-      {isAdmin && !manageUserId ? (
-        <section style={{ marginTop: 18, padding: 14, border: "1px solid #eee", borderRadius: 14 }}>
-          <div style={{ fontWeight: 900, fontSize: 16 }}>Create a project</div>
-          <div style={{ opacity: 0.75, marginTop: 6 }}>Add projects here instead of going into the database.</div>
-
-          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
-            <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              placeholder="Project name"
-              style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", minWidth: 280 }}
-            />
-            <button onClick={createProject} disabled={createBusy || newName.trim().length < 2} style={{ fontWeight: 900 }}>
-              {createBusy ? "Creating…" : "Create"}
-            </button>
-          </div>
-        </section>
       ) : null}
 
-      {/* Admin: Manage project access */}
-      {isAdmin && manageUserId ? (
-        <section style={{ marginTop: 18, padding: 14, border: "1px solid #eee", borderRadius: 14 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+      {/* Admin: create project */}
+      {isAdmin && !manageUserId ? (
+        <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
             <div>
-              <div style={{ fontWeight: 900, fontSize: 16 }}>Manage project access</div>
-              <div style={{ opacity: 0.8, marginTop: 6 }}>
-                User: <b>{manageUser?.full_name || manageUserId}</b>{" "}
-                {manageUser?.role ? <span style={{ opacity: 0.75 }}>({manageUser.role})</span> : null}
+              <div style={{ fontWeight: 950, fontSize: 16 }}>Create project</div>
+              <div className="muted" style={{ marginTop: 6 }}>
+                Project-level settings (like week start) are used across reports and timesheets.
               </div>
             </div>
-
-            <div style={{ display: "flex", gap: 10 }}>
-              <button onClick={() => router.push("/profiles")}>Back to Profiles</button>
-              <button onClick={() => router.replace("/projects")}>Exit access mode</button>
-            </div>
+            <Badge>Admin</Badge>
           </div>
 
-          <div style={{ marginTop: 12, opacity: 0.75 }}>
-            Check projects to grant access. Uncheck to remove access.
+          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, marginTop: 12 }}>
+            <div>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+                Project name
+              </div>
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Retail KPI Dashboard"
+              />
+            </div>
+
+            <div>
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+                Week start
+              </div>
+              <select value={newWeekStart} onChange={(e) => setNewWeekStart(e.target.value as WeekStart)}>
+                <option value="sunday">Sunday</option>
+                <option value="monday">Monday</option>
+              </select>
+            </div>
+
+            <div style={{ display: "flex", alignItems: "end" }}>
+              <button
+                className="btn btnPrimary"
+                onClick={createProject}
+                disabled={createBusy || newName.trim().length < 2}
+                title="Creates the project in this org"
+              >
+                {createBusy ? "Creating…" : "Create"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Admin: manage access mode */}
+      {isAdmin && manageUserId ? (
+        <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+            <div>
+              <div style={{ fontWeight: 950, fontSize: 16 }}>Manage project access</div>
+              <div className="muted" style={{ marginTop: 6 }}>
+                User: <b>{manageUser?.full_name || manageUserId}</b> {manageUser?.role ? `(${manageUser.role})` : ""}
+              </div>
+            </div>
+            <Badge>Grant / remove access</Badge>
+          </div>
+
+          <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
+            Toggle projects to grant access. Inactive projects can still be assigned, but typically should stay off.
           </div>
 
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {projects.length === 0 ? (
-              <div style={{ opacity: 0.8 }}>No projects found in this org.</div>
+              <div className="muted">No projects found in this org.</div>
             ) : (
               projects.map((p) => {
                 const assigned = assignedProjectIds.has(p.id);
                 const busy = busyProjectId === p.id;
 
                 return (
-                  <label
+                  <div
                     key={p.id}
+                    className="card"
                     style={{
+                      padding: 12,
+                      borderRadius: 14,
+                      border: "1px solid rgba(15,23,42,0.08)",
+                      background: p.is_active ? "white" : "rgba(15,23,42,0.02)",
+                      opacity: p.is_active ? 1 : 0.8,
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "space-between",
                       gap: 12,
-                      padding: 12,
-                      border: "1px solid #eee",
-                      borderRadius: 12,
-                      background: p.is_active ? "#fff" : "#fafafa",
-                      opacity: p.is_active ? 1 : 0.75,
                     }}
                   >
-                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <input
                         type="checkbox"
                         checked={assigned}
@@ -404,39 +478,46 @@ export default function ProjectsClient() {
                         style={{ width: 18, height: 18 }}
                       />
                       <div>
-                        <div style={{ fontWeight: 900 }}>
-                          {p.name} {!p.is_active ? <span style={{ fontWeight: 700, opacity: 0.7 }}>(inactive)</span> : null}
+                        <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                          <span>{p.name}</span>
+                          {!p.is_active ? <Badge>Inactive</Badge> : null}
+                          <Badge>{weekStartLabel(p.week_start)}</Badge>
                         </div>
-                        <div style={{ fontSize: 12, opacity: 0.7 }}>{p.id}</div>
+                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                          {p.id}
+                        </div>
                       </div>
                     </div>
 
-                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                    <div className="muted" style={{ fontSize: 12 }}>
                       {busy ? "Updating…" : assigned ? "Assigned" : "Not assigned"}
                     </div>
-                  </label>
+                  </div>
                 );
               })
             )}
           </div>
-        </section>
+        </div>
       ) : null}
 
-      {/* Projects list (with Admin active toggle) */}
-      <section style={{ marginTop: 20 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
-          <h3 style={{ margin: 0 }}>All Projects</h3>
-          {!manageUserId ? (
-            <div style={{ opacity: 0.75 }}>
-              Tip: Use Profiles → “Project access” to assign projects to contractors.
+      {/* Project list */}
+      <div className="card cardPad" style={{ maxWidth: 1100 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+          <div>
+            <div style={{ fontWeight: 950, fontSize: 16 }}>All projects</div>
+            <div className="muted" style={{ marginTop: 6 }}>
+              {manageUserId ? "Select projects above to assign access." : "Use People → Project access to assign projects to contractors."}
             </div>
-          ) : null}
+          </div>
+          <Badge>{projects.length} total</Badge>
         </div>
 
         {projects.length === 0 ? (
-          <p style={{ opacity: 0.8, marginTop: 10 }}>No projects found.</p>
+          <div className="muted" style={{ marginTop: 12 }}>
+            No projects found.
+          </div>
         ) : (
-          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
             {projects.map((p) => {
               const busy = busyProjectId === p.id;
 
@@ -445,30 +526,38 @@ export default function ProjectsClient() {
                   key={p.id}
                   style={{
                     padding: 12,
-                    border: "1px solid #eee",
-                    borderRadius: 12,
+                    border: "1px solid rgba(15,23,42,0.08)",
+                    borderRadius: 14,
+                    background: "white",
                     display: "flex",
                     justifyContent: "space-between",
                     gap: 12,
                     alignItems: "center",
+                    flexWrap: "wrap",
                   }}
                 >
                   <div>
-                    <div style={{ fontWeight: 900 }}>
-                      {p.name} {!p.is_active ? <span style={{ fontWeight: 700, opacity: 0.7 }}>(inactive)</span> : null}
+                    <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                      <span>{p.name}</span>
+                      {!p.is_active ? <Badge>Inactive</Badge> : null}
+                      <Badge>{weekStartLabel(p.week_start)}</Badge>
                     </div>
-                    <div style={{ fontSize: 12, opacity: 0.7 }}>{p.id}</div>
+                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+                      {p.id}
+                    </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-                    <button onClick={() => setProjectInUrl(p.id)}>Select</button>
+                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button className="btn" onClick={() => setProjectInUrl(p.id)}>
+                      Select
+                    </button>
 
                     {isAdmin ? (
                       <button
+                        className="btn"
                         disabled={busy}
                         onClick={() => toggleProjectActive(p.id, !p.is_active)}
-                        style={{ fontWeight: 900 }}
-                        title="Enable/disable this project in the org"
+                        title="Enable/disable this project"
                       >
                         {busy ? "Working…" : p.is_active ? "Deactivate" : "Activate"}
                       </button>
@@ -479,25 +568,29 @@ export default function ProjectsClient() {
             })}
           </div>
         )}
-      </section>
 
-      {/* Selected project from URL param */}
-      <section style={{ marginTop: 18 }}>
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Selected Project (via URL query param)</label>
-        <select
-          value={selectedProjectId}
-          onChange={(e) => setProjectInUrl(e.target.value)}
-          style={{ padding: 8, minWidth: 320 }}
-        >
-          <option value="">— Select a project —</option>
-          {projects.map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.name}
-              {p.is_active ? "" : " (inactive)"}
-            </option>
-          ))}
-        </select>
-      </section>
-    </main>
+        {/* Selected project control */}
+        <div style={{ marginTop: 16 }}>
+          <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>
+            Selected project
+          </div>
+          <select value={selectedProjectId} onChange={(e) => setProjectInUrl(e.target.value)} style={{ maxWidth: 520 }}>
+            <option value="">— Select a project —</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {p.is_active ? "" : " (inactive)"}
+              </option>
+            ))}
+          </select>
+
+          {selectedProjectId ? (
+            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
+              Tip: Project selection influences report week boundaries when a project has a custom week start.
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </AppShell>
   );
 }

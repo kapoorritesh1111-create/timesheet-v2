@@ -17,14 +17,10 @@ export default function OnboardingPage() {
   const [fullName, setFullName] = useState("");
   const [hourlyRate, setHourlyRate] = useState<number>(0);
 
-  // Optional “SaaS profile” fields (safe: we will attempt save, then fallback if columns missing)
+  // Matches CURRENT DB baseline
   const [phone, setPhone] = useState("");
-  const [address1, setAddress1] = useState("");
-  const [address2, setAddress2] = useState("");
-  const [city, setCity] = useState("");
-  const [stateRegion, setStateRegion] = useState("");
-  const [postalCode, setPostalCode] = useState("");
-  const [country, setCountry] = useState("US");
+  const [address, setAddress] = useState("");
+  const [avatarUrl, setAvatarUrl] = useState("");
 
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
@@ -34,6 +30,9 @@ export default function OnboardingPage() {
     if (!profile) return;
     setFullName(profile.full_name || "");
     setHourlyRate(Number(profile.hourly_rate ?? 0));
+    setPhone(profile.phone || "");
+    setAddress(profile.address || "");
+    setAvatarUrl(profile.avatar_url || "");
   }, [profile]);
 
   // If not logged in, go login.
@@ -42,7 +41,7 @@ export default function OnboardingPage() {
     if (!userId) router.replace("/login");
   }, [loading, userId, router]);
 
-  // If profile already complete, go dashboard.
+  // If already complete, go dashboard.
   useEffect(() => {
     if (loading) return;
     if (profile && isProfileComplete(profile)) {
@@ -58,6 +57,7 @@ export default function OnboardingPage() {
       const rateOk = Number.isFinite(hourlyRate) && hourlyRate > 0;
       if (!rateOk) return false;
     }
+
     return true;
   }, [fullName, hourlyRate, isContractor]);
 
@@ -67,51 +67,23 @@ export default function OnboardingPage() {
     setBusy(true);
     setMsg("");
 
-    // Attempt to save extended fields too.
-    // If your DB doesn’t have these columns yet, we fallback to only required fields.
-    const patchExtended: any = {
+    const patch: any = {
       full_name: fullName.trim(),
-      hourly_rate: isContractor ? Number(hourlyRate) : null,
-
-      // Optional fields (require DB columns if you want them stored)
+      hourly_rate: isContractor ? Number(hourlyRate) : 0, // your DB currently defaults to 0
       phone: phone.trim() || null,
-      address_line1: address1.trim() || null,
-      address_line2: address2.trim() || null,
-      city: city.trim() || null,
-      state: stateRegion.trim() || null,
-      postal_code: postalCode.trim() || null,
-      country: country.trim() || null,
-
-      // a nice flag for gating later, if you add the column
+      address: address.trim() || null,
+      avatar_url: avatarUrl.trim() || null,
       onboarding_completed_at: new Date().toISOString(),
     };
 
-    const { error: err1 } = await supabase.from("profiles").update(patchExtended).eq("id", profile.id);
+    const { error: err } = await supabase.from("profiles").update(patch).eq("id", profile.id);
 
-    if (err1) {
-      // Fallback: save only the minimal required columns (always exist in your current schema)
-      const minimalPatch: any = {
-        full_name: fullName.trim(),
-        hourly_rate: isContractor ? Number(hourlyRate) : null,
-      };
-
-      const { error: err2 } = await supabase.from("profiles").update(minimalPatch).eq("id", profile.id);
-
-      if (err2) {
-        setMsg(err2.message);
-        setBusy(false);
-        return;
-      }
-
-      setMsg(
-        "Saved the required profile fields. (Optional fields require DB columns — ask me and I’ll give you the SQL.)"
-      );
+    if (err) {
+      setMsg(err.message);
       setBusy(false);
-      router.replace("/dashboard");
       return;
     }
 
-    setBusy(false);
     router.replace("/dashboard");
   }
 
@@ -151,6 +123,7 @@ export default function OnboardingPage() {
                   onChange={(e) => setFullName(e.target.value)}
                   placeholder="Your full name"
                   className="input"
+                  autoComplete="name"
                 />
               </label>
 
@@ -172,45 +145,64 @@ export default function OnboardingPage() {
 
             <div className="card" style={{ padding: 12 }}>
               <div style={{ fontWeight: 800, marginBottom: 8 }}>Optional (professional profile)</div>
-              <div style={{ display: "grid", gap: 10, gridTemplateColumns: "1fr 1fr" }}>
+
+              <div style={{ display: "grid", gap: 10 }}>
                 <label style={{ display: "grid", gap: 6 }}>
                   <span style={{ fontSize: 13, opacity: 0.85 }}>Phone</span>
-                  <input value={phone} onChange={(e) => setPhone(e.target.value)} className="input" />
+                  <input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="(optional)"
+                    className="input"
+                    autoComplete="tel"
+                  />
                 </label>
 
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 13, opacity: 0.85 }}>Country</span>
-                  <input value={country} onChange={(e) => setCountry(e.target.value)} className="input" />
+                  <span style={{ fontSize: 13, opacity: 0.85 }}>Address</span>
+                  <input
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    placeholder="(optional)"
+                    className="input"
+                    autoComplete="street-address"
+                  />
                 </label>
 
                 <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 13, opacity: 0.85 }}>Address line 1</span>
-                  <input value={address1} onChange={(e) => setAddress1(e.target.value)} className="input" />
+                  <span style={{ fontSize: 13, opacity: 0.85 }}>Avatar image URL</span>
+                  <input
+                    value={avatarUrl}
+                    onChange={(e) => setAvatarUrl(e.target.value)}
+                    placeholder="https://… (optional)"
+                    className="input"
+                    inputMode="url"
+                  />
                 </label>
 
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 13, opacity: 0.85 }}>Address line 2</span>
-                  <input value={address2} onChange={(e) => setAddress2(e.target.value)} className="input" />
-                </label>
-
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 13, opacity: 0.85 }}>City</span>
-                  <input value={city} onChange={(e) => setCity(e.target.value)} className="input" />
-                </label>
-
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 13, opacity: 0.85 }}>State/Region</span>
-                  <input value={stateRegion} onChange={(e) => setStateRegion(e.target.value)} className="input" />
-                </label>
-
-                <label style={{ display: "grid", gap: 6 }}>
-                  <span style={{ fontSize: 13, opacity: 0.85 }}>Postal code</span>
-                  <input value={postalCode} onChange={(e) => setPostalCode(e.target.value)} className="input" />
-                </label>
-              </div>
-
-              <div style={{ marginTop: 10, fontSize: 12, opacity: 0.75 }}>
-                If you want these optional fields saved, we’ll add DB columns in Supabase (I’ll give you the exact SQL).
+                {avatarUrl.trim() ? (
+                  <div style={{ display: "flex", gap: 12, alignItems: "center", marginTop: 4 }}>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={avatarUrl.trim()}
+                      alt="Avatar preview"
+                      style={{
+                        width: 48,
+                        height: 48,
+                        borderRadius: 999,
+                        objectFit: "cover",
+                        border: "1px solid rgba(255,255,255,0.12)",
+                      }}
+                      onError={(e) => {
+                        // Hide broken image preview
+                        (e.currentTarget as HTMLImageElement).style.display = "none";
+                      }}
+                    />
+                    <div style={{ fontSize: 12, opacity: 0.75 }}>
+                      Preview (if the link is publicly accessible).
+                    </div>
+                  </div>
+                ) : null}
               </div>
             </div>
 
@@ -227,6 +219,10 @@ export default function OnboardingPage() {
               <button className="btn" onClick={() => router.replace("/dashboard")} disabled={busy}>
                 Skip for now
               </button>
+            </div>
+
+            <div style={{ fontSize: 12, opacity: 0.7 }}>
+              Tip: later we can upgrade avatar to an upload button (Supabase Storage) instead of URL.
             </div>
           </div>
         )}

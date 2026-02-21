@@ -1,7 +1,5 @@
 // src/app/api/admin/invite/route.ts
 import { NextResponse } from "next/server";
-// NOTE: This file lives at src/app/api/admin/invite/route.ts
-// We need to go 4 levels up to reach src/lib/supabaseServer.ts
 import { supabaseService } from "../../../../lib/supabaseServer";
 
 type Role = "admin" | "manager" | "contractor";
@@ -28,6 +26,11 @@ export async function POST(req: Request) {
     const role = String(body.role || "contractor") as Role;
     const manager_id = body.manager_id ? String(body.manager_id) : null;
 
+    const project_ids_raw = Array.isArray(body.project_ids) ? body.project_ids : [];
+    const project_ids = project_ids_raw
+      .map((x: any) => String(x || "").trim())
+      .filter((x: string) => x.length > 0);
+
     if (!email) return NextResponse.json({ ok: false, error: "Email required" }, { status: 400 });
     if (!["manager", "contractor"].includes(role)) {
       return NextResponse.json({ ok: false, error: "Role must be manager or contractor" }, { status: 400 });
@@ -51,14 +54,13 @@ export async function POST(req: Request) {
       .eq("id", caller.user.id)
       .maybeSingle();
 
-    if (callerProfErr) return NextResponse.json({ ok: false, error: callerProfErrErr(callerProfErr) }, { status: 400 });
+    if (callerProfErr) return NextResponse.json({ ok: false, error: callerProfErr?.message || "Profile lookup failed" }, { status: 400 });
     if (!callerProf?.org_id || callerProf.role !== "admin") {
       return NextResponse.json({ ok: false, error: "Admin only" }, { status: 403 });
     }
 
     // Invite
-    const redirectTo =
-      `${process.env.NEXT_PUBLIC_SITE_URL || ""}/auth/callback`.trim() || undefined;
+    const redirectTo = (`${process.env.NEXT_PUBLIC_SITE_URL || ""}/auth/callback`).trim() || undefined;
 
     const { data: inviteData, error: inviteErr } = await supa.auth.admin.inviteUserByEmail(email, { redirectTo });
     if (inviteErr) return NextResponse.json({ ok: false, error: inviteErr.message }, { status: 400 });
@@ -72,7 +74,7 @@ export async function POST(req: Request) {
       org_id: callerProf.org_id,
       role,
       full_name: full_name || null,
-      hourly_rate: role === "contractor" ? hourly_rate : null,
+      hourly_rate: hourly_rate, // allow hourly_rate for any role (admin wants flexibility)
       is_active: true,
       manager_id: role === "contractor" ? manager_id : null,
     };
@@ -80,12 +82,44 @@ export async function POST(req: Request) {
     const { error: upErr } = await supa.from("profiles").upsert(payload, { onConflict: "id" });
     if (upErr) return NextResponse.json({ ok: false, error: upErr.message }, { status: 400 });
 
+    // Optional: assign projects (recommended for contractors)
+    if (project_ids.length > 0) {
+      // Validate projects belong to org
+      const { data: validProjects, error: projErr } = await supa
+        .from("projects")
+        .select("id")
+        .eq("org_id", callerProf.org_id)
+        .in("id", project_ids);
+
+      if (projErr) return NextResponse.json({ ok: false, error: projErr.message }, { status: 400 });
+
+      const validIds = new Set(((validProjects as any) ?? []).map((p: any) => p.id));
+      const invalid = project_ids.filter((id: string) => !validIds.has(id));
+      if (invalid.length) {
+        return NextResponse.json(
+          { ok: false, error: `Invalid project(s) for this org: ${invalid.join(", ")}` },
+          { status: 400 }
+        );
+      }
+
+      const memberRows = project_ids.map((pid: string) => ({
+        org_id: callerProf.org_id,
+        project_id: pid,
+        user_id: invitedUserId,
+        profile_id: invitedUserId, // your schema uses both; keep consistent
+        is_active: true,
+      }));
+
+      // Upsert by PK: (project_id, user_id)
+      const { error: memErr } = await supa
+        .from("project_members")
+        .upsert(memberRows as any, { onConflict: "project_id,user_id" });
+
+      if (memErr) return NextResponse.json({ ok: false, error: memErr.message }, { status: 400 });
+    }
+
     return NextResponse.json({ ok: true });
   } catch (e: any) {
     return NextResponse.json({ ok: false, error: e?.message || "Server error" }, { status: 500 });
   }
-}
-
-function callerProfErrErr(err: any) {
-  return err?.message || "Profile lookup failed";
 }

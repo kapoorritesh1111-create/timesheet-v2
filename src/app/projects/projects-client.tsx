@@ -27,12 +27,12 @@ type SimpleProfile = {
 
 export default function ProjectsClient() {
   const router = useRouter();
-  const searchParams = useSearchParams(); // inside Suspense via page.tsx
+  const searchParams = useSearchParams();
   const { loading, userId, profile, error: profErr } = useProfile();
 
   const selectedProjectId = useMemo(() => searchParams.get("project") || "", [searchParams]);
 
-  // NEW: project assignment mode
+  // project assignment mode
   const manageUserId = useMemo(() => searchParams.get("user") || "", [searchParams]);
 
   const [projects, setProjects] = useState<Project[]>([]);
@@ -43,6 +43,10 @@ export default function ProjectsClient() {
   const [memberMap, setMemberMap] = useState<Record<string, MemberRow>>({});
   const [busyProjectId, setBusyProjectId] = useState<string>("");
 
+  // Admin project creation state
+  const [newName, setNewName] = useState("");
+  const [createBusy, setCreateBusy] = useState(false);
+
   const isAdmin = profile?.role === "admin";
   const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
 
@@ -52,7 +56,45 @@ export default function ProjectsClient() {
     router.replace(url);
   }
 
-  // Load projects list (same logic as before, but also needed for assignment mode)
+  async function reloadProjects() {
+    if (!profile) return;
+
+    setFetchErr("");
+
+    // Admin/Manager: show org projects
+    // Contractor: membership-driven projects
+    if (isManagerOrAdmin) {
+      const { data, error } = await supabase
+        .from("projects")
+        .select("id, name, is_active, org_id")
+        .eq("org_id", profile.org_id)
+        .order("name", { ascending: true });
+
+      if (error) {
+        setFetchErr(error.message);
+        return;
+      }
+      setProjects((data || []) as Project[]);
+    } else {
+      const { data, error } = await supabase
+        .from("project_members")
+        .select("project_id, projects:project_id (id, name, is_active, org_id)")
+        .eq("profile_id", profile.id)
+        .eq("is_active", true);
+
+      if (error) {
+        setFetchErr(error.message);
+        return;
+      }
+
+      const flattened = (data || []).map((row: any) => row.projects).filter(Boolean) as Project[];
+      const uniq = Array.from(new Map(flattened.map((p) => [p.id, p])).values());
+      uniq.sort((a, b) => a.name.localeCompare(b.name));
+      setProjects(uniq);
+    }
+  }
+
+  // Load projects list
   useEffect(() => {
     if (loading) return;
 
@@ -66,58 +108,21 @@ export default function ProjectsClient() {
       return;
     }
 
-    (async () => {
-      setFetchErr("");
-
-      // Admin/Manager: show org projects
-      // Contractor: membership-driven projects
-      if (isManagerOrAdmin) {
-        const { data, error } = await supabase
-          .from("projects")
-          .select("id, name, is_active, org_id")
-          .eq("org_id", profile.org_id)
-          .order("name", { ascending: true });
-
-        if (error) {
-          setFetchErr(error.message);
-          return;
-        }
-        setProjects((data || []) as Project[]);
-      } else {
-        const { data, error } = await supabase
-          .from("project_members")
-          .select("project_id, projects:project_id (id, name, is_active, org_id)")
-          .eq("profile_id", profile.id)
-          .eq("is_active", true);
-
-        if (error) {
-          setFetchErr(error.message);
-          return;
-        }
-
-        const flattened = (data || []).map((row: any) => row.projects).filter(Boolean) as Project[];
-
-        const uniq = Array.from(new Map(flattened.map((p) => [p.id, p])).values());
-        uniq.sort((a, b) => a.name.localeCompare(b.name));
-
-        setProjects(uniq);
-      }
-    })();
-  }, [loading, userId, profile, profErr, router, isManagerOrAdmin]);
+    reloadProjects();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, userId, profile, profErr, router]);
 
   // Load user being managed + membership map (Admin only)
   useEffect(() => {
     if (loading) return;
     if (!profile) return;
 
-    // Only activate assignment UI if query param exists
     if (!manageUserId) {
       setManageUser(null);
       setMemberMap({});
       return;
     }
 
-    // Only admin can manage assignments (keep simple + safe)
     if (!isAdmin) {
       setFetchErr("Only Admin can manage project access.");
       return;
@@ -127,7 +132,6 @@ export default function ProjectsClient() {
     (async () => {
       setFetchErr("");
 
-      // Load managed user's profile (for display)
       const { data: u, error: uErr } = await supabase
         .from("profiles")
         .select("id, full_name, role")
@@ -147,7 +151,6 @@ export default function ProjectsClient() {
 
       setManageUser(u as SimpleProfile);
 
-      // Load membership rows for that user (org scoped)
       const { data: mem, error: memErr } = await supabase
         .from("project_members")
         .select("id, project_id, is_active")
@@ -193,7 +196,6 @@ export default function ProjectsClient() {
       const existing = memberMap[projectId];
 
       if (existing) {
-        // update is_active
         const { error } = await supabase
           .from("project_members")
           .update({ is_active: nextAssigned })
@@ -209,12 +211,11 @@ export default function ProjectsClient() {
           [projectId]: { ...existing, is_active: nextAssigned },
         }));
       } else {
-        // insert new membership
         const payload: any = {
           org_id: profile.org_id,
           project_id: projectId,
           profile_id: manageUserId,
-          user_id: manageUserId, // keep compatible with your current schema
+          user_id: manageUserId, // compatibility with your current schema
           is_active: true,
         };
 
@@ -234,6 +235,63 @@ export default function ProjectsClient() {
           [projectId]: data as MemberRow,
         }));
       }
+    } finally {
+      setBusyProjectId("");
+    }
+  }
+
+  async function createProject() {
+    if (!profile) return;
+    if (!isAdmin) return;
+
+    const name = newName.trim();
+    if (name.length < 2) {
+      setFetchErr("Project name must be at least 2 characters.");
+      return;
+    }
+
+    setCreateBusy(true);
+    setFetchErr("");
+
+    try {
+      const { error } = await supabase.from("projects").insert({
+        org_id: profile.org_id,
+        name,
+        is_active: true,
+      });
+
+      if (error) {
+        setFetchErr(error.message);
+        return;
+      }
+
+      setNewName("");
+      await reloadProjects();
+    } finally {
+      setCreateBusy(false);
+    }
+  }
+
+  async function toggleProjectActive(projectId: string, nextActive: boolean) {
+    if (!profile) return;
+    if (!isAdmin) return;
+
+    setBusyProjectId(projectId);
+    setFetchErr("");
+
+    try {
+      const { error } = await supabase
+        .from("projects")
+        .update({ is_active: nextActive })
+        .eq("id", projectId)
+        .eq("org_id", profile.org_id);
+
+      if (error) {
+        setFetchErr(error.message);
+        return;
+      }
+
+      setProjects((prev) => prev.map((p) => (p.id === projectId ? { ...p, is_active: nextActive } : p)));
     } finally {
       setBusyProjectId("");
     }
@@ -272,17 +330,34 @@ export default function ProjectsClient() {
         </div>
       )}
 
-      {/* NEW: Admin project access management */}
+      {/* Admin: Create project */}
+      {isAdmin && !manageUserId ? (
+        <section style={{ marginTop: 18, padding: 14, border: "1px solid #eee", borderRadius: 14 }}>
+          <div style={{ fontWeight: 900, fontSize: 16 }}>Create a project</div>
+          <div style={{ opacity: 0.75, marginTop: 6 }}>Add projects here instead of going into the database.</div>
+
+          <div style={{ display: "flex", gap: 10, marginTop: 12, flexWrap: "wrap" }}>
+            <input
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="Project name"
+              style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", minWidth: 280 }}
+            />
+            <button onClick={createProject} disabled={createBusy || newName.trim().length < 2} style={{ fontWeight: 900 }}>
+              {createBusy ? "Creating…" : "Create"}
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      {/* Admin: Manage project access */}
       {isAdmin && manageUserId ? (
         <section style={{ marginTop: 18, padding: 14, border: "1px solid #eee", borderRadius: 14 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
             <div>
               <div style={{ fontWeight: 900, fontSize: 16 }}>Manage project access</div>
               <div style={{ opacity: 0.8, marginTop: 6 }}>
-                User:{" "}
-                <b>
-                  {manageUser?.full_name || manageUserId}
-                </b>{" "}
+                User: <b>{manageUser?.full_name || manageUserId}</b>{" "}
                 {manageUser?.role ? <span style={{ opacity: 0.75 }}>({manageUser.role})</span> : null}
               </div>
             </div>
@@ -330,12 +405,9 @@ export default function ProjectsClient() {
                       />
                       <div>
                         <div style={{ fontWeight: 900 }}>
-                          {p.name}{" "}
-                          {!p.is_active ? <span style={{ fontWeight: 700, opacity: 0.7 }}>(inactive)</span> : null}
+                          {p.name} {!p.is_active ? <span style={{ fontWeight: 700, opacity: 0.7 }}>(inactive)</span> : null}
                         </div>
-                        <div style={{ fontSize: 12, opacity: 0.7 }}>
-                          {p.id}
-                        </div>
+                        <div style={{ fontSize: 12, opacity: 0.7 }}>{p.id}</div>
                       </div>
                     </div>
 
@@ -350,11 +422,68 @@ export default function ProjectsClient() {
         </section>
       ) : null}
 
-      {/* Existing “selected project” UI */}
-      <section style={{ marginTop: 16 }}>
-        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>
-          Selected Project (via URL query param)
-        </label>
+      {/* Projects list (with Admin active toggle) */}
+      <section style={{ marginTop: 20 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", alignItems: "baseline" }}>
+          <h3 style={{ margin: 0 }}>All Projects</h3>
+          {!manageUserId ? (
+            <div style={{ opacity: 0.75 }}>
+              Tip: Use Profiles → “Project access” to assign projects to contractors.
+            </div>
+          ) : null}
+        </div>
+
+        {projects.length === 0 ? (
+          <p style={{ opacity: 0.8, marginTop: 10 }}>No projects found.</p>
+        ) : (
+          <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+            {projects.map((p) => {
+              const busy = busyProjectId === p.id;
+
+              return (
+                <div
+                  key={p.id}
+                  style={{
+                    padding: 12,
+                    border: "1px solid #eee",
+                    borderRadius: 12,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 12,
+                    alignItems: "center",
+                  }}
+                >
+                  <div>
+                    <div style={{ fontWeight: 900 }}>
+                      {p.name} {!p.is_active ? <span style={{ fontWeight: 700, opacity: 0.7 }}>(inactive)</span> : null}
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.7 }}>{p.id}</div>
+                  </div>
+
+                  <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                    <button onClick={() => setProjectInUrl(p.id)}>Select</button>
+
+                    {isAdmin ? (
+                      <button
+                        disabled={busy}
+                        onClick={() => toggleProjectActive(p.id, !p.is_active)}
+                        style={{ fontWeight: 900 }}
+                        title="Enable/disable this project in the org"
+                      >
+                        {busy ? "Working…" : p.is_active ? "Deactivate" : "Activate"}
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Selected project from URL param */}
+      <section style={{ marginTop: 18 }}>
+        <label style={{ display: "block", fontWeight: 700, marginBottom: 6 }}>Selected Project (via URL query param)</label>
         <select
           value={selectedProjectId}
           onChange={(e) => setProjectInUrl(e.target.value)}
@@ -368,21 +497,6 @@ export default function ProjectsClient() {
             </option>
           ))}
         </select>
-      </section>
-
-      <section style={{ marginTop: 20 }}>
-        <h3 style={{ marginBottom: 10 }}>Projects</h3>
-        {projects.length === 0 ? (
-          <p style={{ opacity: 0.8 }}>No projects found.</p>
-        ) : (
-          <ul style={{ margin: 0, paddingLeft: 18 }}>
-            {projects.map((p) => (
-              <li key={p.id}>
-                <b>{p.name}</b> — <code>{p.id}</code>
-              </li>
-            ))}
-          </ul>
-        )}
       </section>
     </main>
   );

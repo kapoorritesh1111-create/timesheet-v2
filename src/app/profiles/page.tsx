@@ -107,7 +107,6 @@ function ProfilesInner() {
   }
 
   if (!profile || !userId) {
-    // RequireOnboarding should normally handle this; keep as safety net.
     return (
       <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
         <h1>Profiles</h1>
@@ -164,9 +163,30 @@ function ProfilesInner() {
 
         {visibleRows.map((r) => {
           const isSelf = r.id === userId;
-          const canEdit = isAdmin || (isManager && (isSelf || r.manager_id === userId)) || isSelf;
+
+          // ✅ EDIT RULES
+          // - Admin: can edit everything except we keep role change restricted below
+          // - Manager: can edit direct reports (and self name), but not role changes
+          // - Contractor: can edit self name only (not hourly_rate)
+          const isDirectReport = r.manager_id === userId;
+
+          const canEditRow =
+            isAdmin ||
+            (isManager && (isSelf || isDirectReport)) ||
+            (r.id === userId); // contractor self
+
           const canAssignManager = isAdmin && r.role === "contractor";
-          const canChangeRole = isAdmin && r.role !== "admin"; // keep admin stable
+          const canChangeRole = isAdmin && r.role !== "admin";
+
+          // ✅ Hourly rate can be edited by:
+          // - Admin for any contractor
+          // - Manager for direct-report contractors
+          const canEditHourlyRate =
+            (isAdmin && r.role === "contractor") ||
+            (isManager && isDirectReport && r.role === "contractor");
+
+          // Contractors should not self-edit rate
+          const hourlyRateDisabled = !canEditHourlyRate;
 
           return (
             <div
@@ -182,19 +202,29 @@ function ProfilesInner() {
             >
               <input
                 value={r.full_name ?? ""}
-                disabled={!canEdit}
+                disabled={!canEditRow}
                 onChange={(e) =>
                   setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, full_name: e.target.value } : x)))
                 }
                 placeholder="Full name"
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: canEdit ? "#fff" : "#f6f6f6" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: canEditRow ? "#fff" : "#f6f6f6",
+                }}
               />
 
               <select
                 value={r.role}
                 disabled={!canChangeRole}
                 onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, role: e.target.value as Role } : x)))}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: canChangeRole ? "#fff" : "#f6f6f6" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: canChangeRole ? "#fff" : "#f6f6f6",
+                }}
               >
                 <option value="contractor">contractor</option>
                 <option value="manager">manager</option>
@@ -205,7 +235,12 @@ function ProfilesInner() {
                 value={r.manager_id ?? ""}
                 disabled={!canAssignManager}
                 onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, manager_id: e.target.value || null } : x)))}
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: canAssignManager ? "#fff" : "#f6f6f6" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: canAssignManager ? "#fff" : "#f6f6f6",
+                }}
               >
                 <option value="">—</option>
                 {managers.map((m) => (
@@ -220,19 +255,17 @@ function ProfilesInner() {
                 step="0.01"
                 min="0"
                 value={Number(r.hourly_rate ?? 0)}
-                disabled={!canEdit || r.role !== "contractor"}
+                disabled={hourlyRateDisabled}
                 onChange={(e) =>
                   setRows((prev) =>
-                    prev.map((x) =>
-                      x.id === r.id ? { ...x, hourly_rate: Number(e.target.value) } : x
-                    )
+                    prev.map((x) => (x.id === r.id ? { ...x, hourly_rate: Number(e.target.value) } : x))
                   )
                 }
                 style={{
                   padding: 10,
                   borderRadius: 10,
                   border: "1px solid #ddd",
-                  background: canEdit && r.role === "contractor" ? "#fff" : "#f6f6f6",
+                  background: !hourlyRateDisabled ? "#fff" : "#f6f6f6",
                 }}
               />
 
@@ -242,7 +275,12 @@ function ProfilesInner() {
                 onChange={(e) =>
                   setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, is_active: e.target.value === "active" } : x)))
                 }
-                style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: isAdmin ? "#fff" : "#f6f6f6" }}
+                style={{
+                  padding: 10,
+                  borderRadius: 10,
+                  border: "1px solid #ddd",
+                  background: isAdmin ? "#fff" : "#f6f6f6",
+                }}
               >
                 <option value="active">active</option>
                 <option value="inactive">inactive</option>
@@ -257,7 +295,7 @@ function ProfilesInner() {
                 </button>
 
                 <button
-                  disabled={!canEdit || busyId === r.id}
+                  disabled={!canEditRow || busyId === r.id}
                   onClick={() =>
                     saveRow(r.id, {
                       full_name: r.full_name || null,

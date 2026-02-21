@@ -1,6 +1,7 @@
 // src/app/profiles/page.tsx
 "use client";
 
+import RequireOnboarding from "../../components/auth/RequireOnboarding";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseBrowser";
@@ -18,7 +19,7 @@ type ProfileRow = {
   manager_id: string | null;
 };
 
-export default function ProfilesPage() {
+function ProfilesInner() {
   const router = useRouter();
   const { loading: profLoading, profile, userId } = useProfile();
 
@@ -106,6 +107,7 @@ export default function ProfilesPage() {
   }
 
   if (!profile || !userId) {
+    // RequireOnboarding should normally handle this; keep as safety net.
     return (
       <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
         <h1>Profiles</h1>
@@ -181,7 +183,9 @@ export default function ProfilesPage() {
               <input
                 value={r.full_name ?? ""}
                 disabled={!canEdit}
-                onChange={(e) => setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, full_name: e.target.value } : x)))}
+                onChange={(e) =>
+                  setRows((prev) => prev.map((x) => (x.id === r.id ? { ...x, full_name: e.target.value } : x)))
+                }
                 placeholder="Full name"
                 style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd", background: canEdit ? "#fff" : "#f6f6f6" }}
               />
@@ -273,5 +277,13 @@ export default function ProfilesPage() {
         })}
       </div>
     </main>
+  );
+}
+
+export default function ProfilesPage() {
+  return (
+    <RequireOnboarding>
+      <ProfilesInner />
+    </RequireOnboarding>
   );
 }

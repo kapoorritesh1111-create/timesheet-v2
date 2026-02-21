@@ -2,12 +2,11 @@
 import type { Profile } from "./useProfile";
 
 /**
- * Minimal "SaaS professional" completion rules:
- * - full_name is required for everyone
+ * "Complete" profile definition for gating:
+ * - User must be active
+ * - full_name required
  * - contractors must have hourly_rate > 0
- * - inactive users are treated as not complete (they shouldn't proceed)
- *
- * You can tighten/expand later (phone/address/avatar, etc.)
+ * - onboarding_completed_at must be set (this is the explicit completion marker)
  */
 export function isProfileComplete(profile: Profile | null): boolean {
   if (!profile) return false;
@@ -22,6 +21,9 @@ export function isProfileComplete(profile: Profile | null): boolean {
     const rate = Number(profile.hourly_rate ?? 0);
     if (!Number.isFinite(rate) || rate <= 0) return false;
   }
+
+  // Explicit onboarding completion marker
+  if (!profile.onboarding_completed_at) return false;
 
   return true;
 }

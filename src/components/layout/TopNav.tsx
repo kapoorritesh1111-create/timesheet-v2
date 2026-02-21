@@ -26,11 +26,16 @@ export default function TopNav() {
   const role = (profile?.role || "").toLowerCase();
   const isAdmin = role === "admin";
   const isManager = role === "manager";
+  const isManagerOrAdmin = isAdmin || isManager;
 
   const links: Array<{ href: string; label: string; show?: boolean }> = [
     { href: "/dashboard", label: "Dashboard" },
     { href: "/timesheet", label: "Timesheet" },
-    { href: "/approvals", label: "Approvals", show: isAdmin || isManager },
+    { href: "/approvals", label: "Approvals", show: isManagerOrAdmin },
+
+    // v1.3: payroll reporting (RLS scopes what each role sees)
+    { href: "/reports/payroll", label: "Payroll", show: true },
+
     { href: "/projects", label: "Projects" },
     { href: "/profiles", label: "Profiles", show: isAdmin },
     { href: "/admin", label: "Admin", show: isAdmin },

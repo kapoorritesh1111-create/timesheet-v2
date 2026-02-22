@@ -2,8 +2,8 @@
 "use client";
 
 import RequireOnboarding from "../../components/auth/RequireOnboarding";
+import AppShell from "../../components/layout/AppShell";
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { supabase } from "../../lib/supabaseBrowser";
 import { useProfile } from "../../lib/useProfile";
 import { addDays, startOfWeekSunday, toISODate, weekRangeLabel } from "../../lib/date";
@@ -13,11 +13,13 @@ type EntryStatus = "draft" | "submitted" | "approved" | "rejected";
 type EntryRow = {
   id: string;
   user_id: string;
-  entry_date: string;
+  entry_date: string; // YYYY-MM-DD
   project_id: string;
   notes: string | null;
   status: EntryStatus;
-  hours_worked: number | null;
+  hours_worked: number | null; // from v_time_entries
+  full_name?: string | null; // from v_time_entries (optional)
+  project_name?: string | null; // from v_time_entries (optional)
 };
 
 type ProfileRow = { id: string; full_name: string | null; role: string | null; manager_id?: string | null };
@@ -32,9 +34,24 @@ type Group = {
   entries: EntryRow[];
 };
 
+function StatusPill({ status }: { status: EntryStatus }) {
+  const cls =
+    status === "approved"
+      ? "statusPill statusApproved"
+      : status === "submitted"
+        ? "statusPill statusSubmitted"
+        : status === "rejected"
+          ? "statusPill statusRejected"
+          : "statusPill statusDraft";
+  return <span className={cls}>{status}</span>;
+}
+
 function ApprovalsInner() {
-  const router = useRouter();
   const { loading: profLoading, profile, userId } = useProfile();
+
+  const isAdmin = profile?.role === "admin";
+  const isManager = profile?.role === "manager";
+  const isManagerOrAdmin = isAdmin || isManager;
 
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekSunday(new Date()));
   const weekStartISO = useMemo(() => toISODate(weekStart), [weekStart]);
@@ -46,117 +63,117 @@ function ApprovalsInner() {
   const [msg, setMsg] = useState("");
   const [busyKey, setBusyKey] = useState<string>("");
 
-  const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
-  const isAdmin = profile?.role === "admin";
-  const isManager = profile?.role === "manager";
-
   useEffect(() => {
-    if (!profile || !userId) return;
-    if (!isManagerOrAdmin) return;
+    if (!userId || !profile || !isManagerOrAdmin) return;
 
     let cancelled = false;
+
     (async () => {
       setMsg("");
 
-      // Manager scope: only direct reports
-      let allowedUserIds: string[] | null = null;
-      if (isManager) {
-        const { data: team, error: teamErr } = await supabase
-          .from("profiles")
-          .select("id")
-          .eq("org_id", profile.org_id)
-          .eq("manager_id", userId)
-          .eq("is_active", true);
+      // Load supporting lookups (profiles/projects) so UI can show names.
+      // Keep these lightweight.
+      try {
+        // Profiles:
+        // - Admin: everyone in org
+        // - Manager: just direct reports (manager_id = auth.uid()) + self (optional)
+        if (isAdmin) {
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("id, full_name, role, manager_id")
+            .eq("org_id", profile.org_id);
 
-        if (teamErr) {
-          setMsg(teamErr.message);
-          setEntries([]);
-          return;
+          if (!cancelled) {
+            if (error) setMsg(error.message);
+            const map: Record<string, ProfileRow> = {};
+            for (const r of (data ?? []) as any[]) map[r.id] = r;
+            setProfiles(map);
+          }
+        } else {
+          const { data, error } = await supabase
+            .from("profiles")
+            .select("id, full_name, role, manager_id")
+            .eq("org_id", profile.org_id)
+            .eq("manager_id", userId);
+
+          if (!cancelled) {
+            if (error) setMsg(error.message);
+            const map: Record<string, ProfileRow> = {};
+            for (const r of (data ?? []) as any[]) map[r.id] = r;
+            setProfiles(map);
+          }
         }
 
-        allowedUserIds = Array.from(new Set(((team as any) ?? []).map((x: any) => x.id)));
-        if (allowedUserIds.length === 0) {
-          setEntries([]);
-          return;
+        // Projects:
+        const { data: proj, error: projErr } = await supabase
+          .from("projects")
+          .select("id, name")
+          .eq("org_id", profile.org_id);
+
+        if (!cancelled) {
+          if (projErr) setMsg((m) => (m ? `${m}\n${projErr.message}` : projErr.message));
+          const pmap: Record<string, ProjectRow> = {};
+          for (const p of (proj ?? []) as any[]) pmap[p.id] = p;
+          setProjects(pmap);
         }
+      } catch (e: any) {
+        if (!cancelled) setMsg(e?.message || "Failed to load lookups.");
       }
 
-      // load submitted entries for week
-      let q = supabase
+      // Entries (submitted only) for the selected week.
+      // View includes hours_worked and optional full_name/project_name (if present in your view definition).
+      const { data: ent, error: entErr } = await supabase
         .from("v_time_entries")
-        .select("id, user_id, entry_date, project_id, notes, status, hours_worked")
+        .select("id, user_id, entry_date, project_id, notes, status, hours_worked, full_name, project_name")
+        .eq("org_id", profile.org_id)
+        .eq("status", "submitted")
         .gte("entry_date", weekStartISO)
         .lte("entry_date", weekEndISO)
-        .eq("status", "submitted")
         .order("user_id", { ascending: true })
         .order("entry_date", { ascending: true });
 
-      if (allowedUserIds) q = q.in("user_id", allowedUserIds);
-
-      const { data: rows, error } = await q;
-
-      if (cancelled) return;
-      if (error) {
-        setMsg(error.message);
-        setEntries([]);
-        return;
-      }
-
-      const list = ((rows as any) ?? []) as EntryRow[];
-      setEntries(list);
-
-      // load profile names
-      const userIds = Array.from(new Set(list.map((r) => r.user_id)));
-      if (userIds.length) {
-        const { data: profs, error: perr } = await supabase
-          .from("profiles")
-          .select("id, full_name, role, manager_id")
-          .in("id", userIds);
-
-        if (!cancelled && !perr) {
-          const map: Record<string, ProfileRow> = {};
-          for (const p of (profs as any) ?? []) map[p.id] = p;
-          setProfiles(map);
+      if (!cancelled) {
+        if (entErr) {
+          setMsg((m) => (m ? `${m}\n${entErr.message}` : entErr.message));
+          setEntries([]);
+          return;
         }
-      }
-
-      // load projects referenced
-      const projIds = Array.from(new Set(list.map((r) => r.project_id)));
-      if (projIds.length) {
-        const { data: projs, error: perr2 } = await supabase
-          .from("projects")
-          .select("id, name")
-          .in("id", projIds);
-
-        if (!cancelled && !perr2) {
-          const map: Record<string, ProjectRow> = {};
-          for (const p of (projs as any) ?? []) map[p.id] = p;
-          setProjects(map);
-        }
+        setEntries(((ent as any) ?? []) as EntryRow[]);
       }
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [profile, userId, isManagerOrAdmin, isManager, weekStartISO, weekEndISO]);
+  }, [userId, profile, isAdmin, isManagerOrAdmin, weekStartISO, weekEndISO]);
 
   const groups: Group[] = useMemo(() => {
     const map = new Map<GroupKey, Group>();
-
     for (const e of entries) {
-      const ws = toISODate(startOfWeekSunday(new Date(e.entry_date + "T00:00:00")));
-      const we = toISODate(addDays(startOfWeekSunday(new Date(e.entry_date + "T00:00:00")), 6));
+      const ws = weekStartISO; // since we fetch only current week, this is stable
+      const we = weekEndISO;
       const key = `${e.user_id}|${ws}`;
-
       if (!map.has(key)) {
         map.set(key, { key, user_id: e.user_id, week_start: ws, week_end: we, entries: [] });
       }
       map.get(key)!.entries.push(e);
     }
-
     return Array.from(map.values()).sort((a, b) => (a.user_id + a.week_start).localeCompare(b.user_id + b.week_start));
-  }, [entries]);
+  }, [entries, weekStartISO, weekEndISO]);
+
+  function displayName(user_id: string, sample?: EntryRow) {
+    // Prefer view-provided full_name, else lookup map, else fall back.
+    return sample?.full_name || profiles[user_id]?.full_name || user_id.slice(0, 8);
+  }
+
+  function projectLabel(project_id: string, sample?: EntryRow) {
+    return sample?.project_name || projects[project_id]?.name || project_id.slice(0, 8);
+  }
+
+  function groupTotalHours(g: Group) {
+    const sum = g.entries.reduce((acc, e) => acc + Number(e.hours_worked ?? 0), 0);
+    return sum;
+  }
 
   async function approveGroup(g: Group) {
     setBusyKey(g.key);
@@ -176,9 +193,8 @@ function ApprovalsInner() {
         return;
       }
 
-      setEntries((prev) =>
-        prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end))
-      );
+      // Remove from current list
+      setEntries((prev) => prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end)));
       setMsg("Approved ✅");
     } finally {
       setBusyKey("");
@@ -203,131 +219,144 @@ function ApprovalsInner() {
         return;
       }
 
-      setEntries((prev) =>
-        prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end))
-      );
+      setEntries((prev) => prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end)));
       setMsg("Rejected (sent back editable) ✅");
     } finally {
       setBusyKey("");
     }
   }
 
-  async function logout() {
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
+  const headerRight = (
+    <div className="apHeaderRight">
+      <div className="apWeekNav">
+        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, -7))} disabled={!!busyKey} title="Previous week">
+          ← Prev
+        </button>
+        <button className="pill" onClick={() => setWeekStart(startOfWeekSunday(new Date()))} disabled={!!busyKey} title="This week">
+          This week
+        </button>
+        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, 7))} disabled={!!busyKey} title="Next week">
+          Next →
+        </button>
+      </div>
+    </div>
+  );
 
   if (profLoading) {
     return (
-      <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-        <h1>Approvals</h1>
-        <p>Loading…</p>
-      </main>
+      <AppShell title="Approvals" subtitle="Loading profile…">
+        <div className="card cardPad">
+          <div className="muted">Loading…</div>
+        </div>
+      </AppShell>
     );
   }
 
   if (!profile || !userId) {
     return (
-      <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-        <h1>Approvals</h1>
-        <p>Please log in.</p>
-        <button onClick={() => router.push("/login")}>Go to Login</button>
-      </main>
+      <AppShell title="Approvals" subtitle="Please log in">
+        <div className="alert alertWarn">
+          <div style={{ fontWeight: 950 }}>Session required</div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            Please log in again.
+          </div>
+        </div>
+      </AppShell>
     );
   }
 
   if (!isManagerOrAdmin) {
     return (
-      <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-        <h1>Approvals</h1>
-        <p style={{ color: "#b00", marginTop: 10 }}>Manager/Admin only.</p>
-        <button onClick={() => router.push("/dashboard")} style={{ marginTop: 10 }}>
-          Back to Dashboard
-        </button>
-      </main>
+      <AppShell title="Approvals" subtitle="Manager/Admin only">
+        <div className="alert alertWarn">
+          <div style={{ fontWeight: 950 }}>Access restricted</div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            This page is only for managers and admins.
+          </div>
+        </div>
+      </AppShell>
     );
   }
 
+  const subtitle = `${weekRangeLabel(weekStart)} • Submitted timesheets`;
+
   return (
-    <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-        <div>
-          <h1 style={{ margin: 0 }}>Approvals</h1>
-          <div style={{ opacity: 0.75, marginTop: 6 }}>
-            Week: {weekRangeLabel(weekStart)} • Scope: {isAdmin ? "Org" : "My team"}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button onClick={() => router.push("/timesheet")}>My Timesheet</button>
-          <button onClick={() => router.push("/dashboard")}>Dashboard</button>
-          <button onClick={() => router.push("/profiles")}>Profiles</button>
-          <button onClick={() => router.push("/projects")}>Projects</button>
-          {profile.role === "admin" ? <button onClick={() => router.push("/admin")}>Admin</button> : null}
-          <button onClick={logout}>Logout</button>
-        </div>
-      </div>
-
+    <AppShell title="Approvals" subtitle={subtitle} right={headerRight}>
       {msg ? (
-        <div style={{ marginTop: 12, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+        <div className="alert alertInfo">
           <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{msg}</pre>
         </div>
       ) : null}
 
-      <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center" }}>
-        <button onClick={() => setWeekStart((d) => addDays(d, -7))}>← Prev</button>
-        <button onClick={() => setWeekStart(startOfWeekSunday(new Date()))}>This week</button>
-        <button onClick={() => setWeekStart((d) => addDays(d, 7))}>Next →</button>
-      </div>
-
-      <div style={{ marginTop: 14 }}>
-        {groups.length === 0 ? (
-          <div style={{ opacity: 0.8 }}>No submitted entries for this week.</div>
-        ) : (
-          groups.map((g) => {
-            const name = profiles[g.user_id]?.full_name ?? g.user_id;
-            const total = g.entries.reduce((a, b) => a + (b.hours_worked ?? 0), 0);
+      {groups.length === 0 ? (
+        <div className="card cardPad" style={{ marginTop: 14 }}>
+          <div style={{ fontWeight: 950 }}>Nothing to approve</div>
+          <div className="muted" style={{ marginTop: 6 }}>
+            No submitted time entries for this week.
+          </div>
+        </div>
+      ) : (
+        <div className="apGroups">
+          {groups.map((g) => {
+            const sample = g.entries[0];
+            const total = groupTotalHours(g);
 
             return (
-              <section key={g.key} style={{ marginBottom: 14, border: "1px solid #eee", borderRadius: 14, padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+              <section key={g.key} className="card cardPad apGroupCard">
+                <div className="apGroupHeader">
                   <div>
-                    <div style={{ fontWeight: 900, fontSize: 16 }}>{name}</div>
-                    <div style={{ opacity: 0.75, marginTop: 4 }}>
-                      {g.week_start} → {g.week_end} • Submitted lines: {g.entries.length} • Total: {total.toFixed(2)} hrs
+                    <div className="apGroupTitle">{displayName(g.user_id, sample)}</div>
+                    <div className="muted apGroupMeta">
+                      Week: {g.week_start} → {g.week_end}
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 10 }}>
-                    <button disabled={busyKey === g.key} onClick={() => rejectGroup(g)}>
-                      {busyKey === g.key ? "Working…" : "Reject"}
-                    </button>
-                    <button disabled={busyKey === g.key} onClick={() => approveGroup(g)} style={{ fontWeight: 900 }}>
-                      {busyKey === g.key ? "Working…" : "Approve"}
-                    </button>
+                  <div className="apGroupRight">
+                    <div className="apGroupTotal">
+                      <div className="muted" style={{ fontWeight: 900 }}>
+                        Total
+                      </div>
+                      <div style={{ fontWeight: 950, fontSize: 18 }}>{total.toFixed(2)} hrs</div>
+                    </div>
+
+                    <div className="apGroupActions">
+                      <button className="btnDanger" onClick={() => rejectGroup(g)} disabled={busyKey === g.key} title="Reject (send back)">
+                        {busyKey === g.key ? "Working…" : "Reject"}
+                      </button>
+                      <button className="btnPrimary" onClick={() => approveGroup(g)} disabled={busyKey === g.key} title="Approve (lock)">
+                        {busyKey === g.key ? "Working…" : "Approve"}
+                      </button>
+                    </div>
                   </div>
                 </div>
 
-                <div style={{ marginTop: 10, opacity: 0.9 }}>
+                <div className="apTable">
+                  <div className="apHead">
+                    <div>Date</div>
+                    <div>Project</div>
+                    <div>Hours</div>
+                    <div>Notes</div>
+                    <div>Status</div>
+                  </div>
+
                   {g.entries.map((e) => (
-                    <div key={e.id} style={{ padding: "8px 0", borderTop: "1px solid #f0f0f0" }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
-                        <div>
-                          <strong>{e.entry_date}</strong>{" "}
-                          <span style={{ opacity: 0.8 }}>• {projects[e.project_id]?.name ?? e.project_id}</span>
-                          {e.notes ? <span style={{ opacity: 0.8 }}> • {e.notes}</span> : null}
-                        </div>
-                        <div style={{ fontWeight: 800 }}>{(e.hours_worked ?? 0).toFixed(2)} hrs</div>
+                    <div key={e.id} className="apRow">
+                      <div className="apCellMono">{e.entry_date}</div>
+                      <div>{projectLabel(e.project_id, e)}</div>
+                      <div className="apCellMono">{Number(e.hours_worked ?? 0).toFixed(2)}</div>
+                      <div className="apNotes">{e.notes || <span className="muted">—</span>}</div>
+                      <div>
+                        <StatusPill status={e.status} />
                       </div>
                     </div>
                   ))}
                 </div>
               </section>
             );
-          })
-        )}
-      </div>
-    </main>
+          })}
+        </div>
+      )}
+    </AppShell>
   );
 }
 

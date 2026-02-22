@@ -27,7 +27,7 @@ type TimeEntryRow = {
   mileage: number | null;
   notes: string | null;
   status: EntryStatus;
-  hours_worked?: number | null;
+  hours_worked?: number | null; // exists in v_time_entries after DB fix
 };
 
 type DraftRow = {
@@ -84,7 +84,6 @@ function TimesheetInner() {
   const [loadingWeek, setLoadingWeek] = useState(false);
 
   const canView = !!userId && !!profile;
-
   const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
   const isContractor = profile?.role === "contractor";
 
@@ -141,6 +140,7 @@ function TimesheetInner() {
       }
 
       // ENTRIES
+      // NOTE: hours_worked comes from v_time_entries after DB fix below.
       const { data: entryRows, error: entryErr } = await supabase
         .from("v_time_entries")
         .select("id, entry_date, project_id, time_in, time_out, lunch_hours, mileage, notes, status, hours_worked")
@@ -350,19 +350,12 @@ function TimesheetInner() {
     }
   }
 
-  const headerSubtitle = profile
-    ? `${weekRangeLabel(weekStart)} • Role: ${profile.role}`
-    : `${weekRangeLabel(weekStart)}`;
+  const headerSubtitle = profile ? `${weekRangeLabel(weekStart)} • Role: ${profile.role}` : `${weekRangeLabel(weekStart)}`;
 
   const headerRight = (
     <div className="tsHeaderRight">
       <div className="tsWeekNav">
-        <button
-          className="pill"
-          onClick={() => setWeekStart((d) => addDays(d, -7))}
-          disabled={busy || loadingWeek}
-          title="Previous week"
-        >
+        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, -7))} disabled={busy || loadingWeek} title="Previous week">
           ← Prev
         </button>
         <button
@@ -373,12 +366,7 @@ function TimesheetInner() {
         >
           This week
         </button>
-        <button
-          className="pill"
-          onClick={() => setWeekStart((d) => addDays(d, 7))}
-          disabled={busy || loadingWeek}
-          title="Next week"
-        >
+        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, 7))} disabled={busy || loadingWeek} title="Next week">
           Next →
         </button>
       </div>
@@ -482,21 +470,9 @@ function TimesheetInner() {
                         ))}
                       </select>
 
-                      <input
-                        type="time"
-                        step={60}
-                        value={r.time_in}
-                        disabled={locked}
-                        onChange={(e) => updateRow(r.tempId, { time_in: e.target.value })}
-                      />
+                      <input type="time" step={60} value={r.time_in} disabled={locked} onChange={(e) => updateRow(r.tempId, { time_in: e.target.value })} />
 
-                      <input
-                        type="time"
-                        step={60}
-                        value={r.time_out}
-                        disabled={locked}
-                        onChange={(e) => updateRow(r.tempId, { time_out: e.target.value })}
-                      />
+                      <input type="time" step={60} value={r.time_out} disabled={locked} onChange={(e) => updateRow(r.tempId, { time_out: e.target.value })} />
 
                       <input
                         value={r.lunch_hours}

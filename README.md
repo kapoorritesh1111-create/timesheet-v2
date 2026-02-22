@@ -1,5 +1,3 @@
-# Timesheet
-
 # Timesheet SaaS — Current Baseline (Next.js 14 + Supabase, DB-first)
 
 This README is the **working baseline** for the repo + DB so we can keep iterating without losing context.
@@ -20,7 +18,7 @@ A multi-tenant timesheet + approvals + payroll reporting app with strict org sco
 - **manager**
   - Scope = **direct reports only**
   - Can view submitted entries for direct reports and approve/reject
-  - Should be able to open **People** (profiles) page but only see assigned reports
+  - Can open **People** (profiles) but only see assigned reports (and self)
 - **contractor**
   - Scope = self only
   - Can submit timesheets only for assigned projects
@@ -37,6 +35,10 @@ A multi-tenant timesheet + approvals + payroll reporting app with strict org sco
 - Clean landing after login/onboarding
 - Shows basic account overview (role, active flag, onboarding status, hourly rate for contractors)
 
+### ✅ Timesheet (`/timesheet`)
+- Standard timesheet entry flow
+- Uses DB-backed view (`v_time_entries`) for consistent computed hours and reporting fields
+
 ### ✅ Projects (`/projects`)
 - Admin:
   - Create project (includes `week_start`)
@@ -46,7 +48,7 @@ A multi-tenant timesheet + approvals + payroll reporting app with strict org sco
   - Sees only allowed projects (via RLS + membership)
 - Drawer UX:
   - Click project row opens details drawer
-  - Shows project settings + a read-only member list (member management can be expanded next)
+  - Shows project settings + a read-only member list
 
 ### ✅ Approvals (`/approvals`)
 - Manager/Admin only
@@ -62,13 +64,13 @@ A multi-tenant timesheet + approvals + payroll reporting app with strict org sco
   - Project
   - Contractor (admin/manager; contractor is locked to self)
 - Outputs:
+  - KPI cards (Total Hours, Total Pay, Avg Rate)
   - Summary by Contractor
   - Summary by Project
   - CSV export (summary or detail)
-  - KPI cards (Total Hours, Total Pay, Avg Rate)
 
 ### ✅ Admin Invite (`/admin`)
-- Admin-only tools page (uses AppShell + RequireOnboarding)
+- Admin-only (RequireOnboarding + role guard)
 - Invite user via `/api/admin/invite`
 - Supports:
   - Invite manager
@@ -77,22 +79,31 @@ A multi-tenant timesheet + approvals + payroll reporting app with strict org sco
     - required manager assignment
 
 ### ✅ People / Profiles (`/profiles`)
-- Table-based “directory + edit” page
+- “People” directory + edit page
 - Visibility intent:
   - Admin: all org users
   - Manager: self + direct reports
   - Contractor: self only
-- Admin controls:
-  - Change role (except cannot demote admin if you enforce that)
-  - Assign manager to contractors
-  - Activate/inactivate users
-  - Edit hourly rates (admin can edit anyone; manager can edit direct reports)
+- Edit rules (UI + should align with DB policies):
+  - Admin can edit everyone
+  - Manager can edit self + direct reports (esp. hourly rate for direct reports)
+  - Contractor can only edit self (limited fields)
 
-> NOTE: This page is currently the **most visually inconsistent** (still uses old layout/buttons vs AppShell + theme).
+> NOTE: This page is still the most visually inconsistent vs the newer pages (it uses older layout patterns vs AppShell + theme classes).
 
 ---
 
-## 3) Database baseline (critical)
+## 3) Navigation (TopNav)
+
+- TopNav is hidden on: `/`, `/login`, `/reset`, `/onboarding`
+- Visible links by role:
+  - Everyone: Dashboard, Timesheet, Payroll, Projects
+  - Manager/Admin: Approvals, People
+  - Admin only: Admin
+
+---
+
+## 4) Database baseline (critical)
 
 ### Core tables (RLS enabled)
 - `orgs`
@@ -101,46 +112,54 @@ A multi-tenant timesheet + approvals + payroll reporting app with strict org sco
 - `project_members`
 - `time_entries`
 
-### View: `v_time_entries`
-This is the primary read model for approvals + payroll.
+### View: `v_time_entries` (read model)
+This view is the primary read model for:
+- `/approvals`
+- `/reports/payroll`
+- (and optionally `/timesheet` UI lists)
+
 It must include **computed hours**:
 
-- `hours_worked` is computed in SQL (recommended formula):
+- `hours_worked` computed in SQL (recommended logic):
   - `hours = (time_out - time_in) - lunch_hours`
-  - safely handles NULLs
+  - handles NULLs safely
   - clamps negatives to 0 (recommended)
 
-This view should also expose:
+This view should also expose (at minimum):
 - `org_id`, `user_id`, `project_id`, `entry_date`, `status`, `notes`
+- `hours_worked`
 - `hourly_rate_snapshot`
-- optional: `full_name`, `project_name` for nicer UI
+
+Optional (nice for UI):
+- `full_name` (from profiles)
+- `project_name` (from projects)
 
 ---
 
-## 4) Repo structure
+## 5) Repo structure
+
 src/
-app/
-admin/
-approvals/
-dashboard/
-profiles/
-projects/
-reports/payroll/
-timesheet/
-api/admin/invite/
-components/
-auth/
-layout/ # AppShell, TopNav
-lib/
-useProfile.ts
-supabaseBrowser.ts
-dateRanges.ts
-date.ts
-
+- app/
+  - admin/
+  - approvals/
+  - dashboard/
+  - profiles/
+  - projects/
+  - reports/payroll/
+  - timesheet/
+  - api/admin/invite/
+- components/
+  - auth/
+  - layout/ (AppShell, TopNav)
+- lib/
+  - useProfile.ts
+  - supabaseBrowser.ts
+  - dateRanges.ts
+  - date.ts
 
 ---
 
-## 5) Environment variables
+## 6) Environment variables
 
 Required:
 - NEXT_PUBLIC_SUPABASE_URL
@@ -150,42 +169,38 @@ Required:
 
 ---
 
-## 6) Where we stand right now (status)
+## 7) Where we stand right now
 
 ### Solid + working
-- End-to-end user flow: login → onboarding → dashboard → timesheet → submit → approvals → payroll reporting
+- End-to-end flow: login → onboarding → dashboard → timesheet → submit → approvals → payroll reporting
 - Org scoping is DB-first (RLS is the source of truth)
-- Payroll + approvals use the view (`v_time_entries`) for consistent calculations
+- Approvals + Payroll run on `v_time_entries` so hours logic is consistent
 
-### Known gaps / improvements
-1) **TopNav**
-   - Manager should see **People** in nav (currently only Admin sees Profiles)
-   - Link should still go to `/profiles` but label it “People”
-   - `/profiles` page + RLS already ensures managers only see assigned users
+### Remaining “polish + correctness” gaps
+1) **People page UI consistency**
+   - `/profiles` still uses older layout conventions vs the AppShell/theme system
+   - Should be upgraded to match Projects/Payroll/Approvals (cards, grid, tags, alerts)
 
-2) **UI consistency / theme**
-   - `/profiles` page still uses older styles and doesn’t use AppShell
-   - Should be upgraded to match the newer “card/cardPad/pill/btnPrimary” system
+2) **Admin polish**
+   - Optional: invite history panel (recent invites)
+   - Optional: org settings (org name, default week start)
 
-3) **Admin**
-   - Optional: add “Invite history” and “Org settings”
-   - Optional: improve validation + error surfacing to match other pages
-
----
-
-## 7) Recommended next change (confirmed)
-
-### Next step #1 (small + high value): Nav + People for managers
-- Update `TopNav` so managers see “People”
-- Keep permissions enforced by RLS + the profiles page filtering
-- This improves the “login onward” polish immediately
-
-### Next step #2 (bigger but important): Rebuild `/profiles` with AppShell + theme
-- Convert `/profiles/page.tsx` to:
-  - Use `AppShell`
-  - Use the same components/classes as Projects/Payroll/Approvals
-  - Keep the exact same permissions logic, just improve UX and consistency
-
-(After that: Admin polish + org settings + theme preferences.)
+3) **DB/RLS validation pass (quick but important)**
+   - Confirm managers can always select **self + direct reports** in `profiles`
+   - Confirm `v_time_entries` exposes `org_id` + `hours_worked` (and optional names) used by pages
+   - Add indexes if needed once data grows (entry_date, org_id, user_id, project_id, status)
 
 ---
+
+## 8) Recommended next change (confirmed)
+
+### Next step (highest value): Rebuild “People” to match theme
+- Convert `/profiles/page.tsx` to use:
+  - `AppShell`
+  - the shared CSS classes used elsewhere (`card`, `cardPad`, `alert`, `pill`, `btnPrimary`, etc.)
+- Keep the **exact same permissions logic** (no behavior change), just UX + consistency
+- This is the biggest “professional” upgrade from login onward.
+
+After that:
+- Admin: add Invite History + Org Settings
+- DB: performance indexes + tighten policies if any edge cases appear

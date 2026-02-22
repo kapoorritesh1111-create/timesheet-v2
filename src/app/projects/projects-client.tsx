@@ -29,6 +29,12 @@ type SimpleProfile = {
   role: string | null;
 };
 
+type DrawerMember = {
+  profile_id: string;
+  full_name: string | null;
+  role: string | null;
+};
+
 function Badge({ children }: { children: React.ReactNode }) {
   return (
     <span
@@ -50,6 +56,43 @@ function Badge({ children }: { children: React.ReactNode }) {
   );
 }
 
+function PillButton({
+  children,
+  onClick,
+  disabled,
+  title,
+  variant,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  disabled?: boolean;
+  title?: string;
+  variant?: "primary" | "default" | "danger";
+}) {
+  const base: React.CSSProperties = {
+    padding: "10px 12px",
+    borderRadius: 12,
+    border: "1px solid rgba(15,23,42,0.10)",
+    background: "white",
+    fontWeight: 850,
+    cursor: disabled ? "not-allowed" : "pointer",
+    opacity: disabled ? 0.6 : 1,
+  };
+
+  const style: React.CSSProperties =
+    variant === "primary"
+      ? { ...base, borderColor: "rgba(37,99,235,0.25)", boxShadow: "0 1px 0 rgba(15,23,42,0.03)" }
+      : variant === "danger"
+        ? { ...base, borderColor: "rgba(239,68,68,0.25)" }
+        : base;
+
+  return (
+    <button className="btn" style={style} onClick={onClick} disabled={disabled} title={title}>
+      {children}
+    </button>
+  );
+}
+
 function weekStartLabel(ws?: WeekStart | null) {
   const v = ws || "sunday";
   return v === "monday" ? "Week starts Monday" : "Week starts Sunday";
@@ -57,6 +100,14 @@ function weekStartLabel(ws?: WeekStart | null) {
 
 function normalize(s: string) {
   return s.trim().toLowerCase();
+}
+
+function copyToClipboard(text: string) {
+  try {
+    navigator.clipboard.writeText(text);
+  } catch {
+    // ignore (some browsers)
+  }
 }
 
 export default function ProjectsClient() {
@@ -83,9 +134,16 @@ export default function ProjectsClient() {
   const [newWeekStart, setNewWeekStart] = useState<WeekStart>("sunday");
   const [createBusy, setCreateBusy] = useState(false);
 
-  // ✅ Step 2 controls
+  // Search + filter
   const [q, setQ] = useState("");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
+
+  // ✅ Drawer state
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerProjectId, setDrawerProjectId] = useState<string>("");
+  const [drawerMembers, setDrawerMembers] = useState<DrawerMember[]>([]);
+  const [drawerBusy, setDrawerBusy] = useState(false);
+  const [drawerMsg, setDrawerMsg] = useState<string>("");
 
   const isAdmin = profile?.role === "admin";
   const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
@@ -220,16 +278,12 @@ export default function ProjectsClient() {
     );
   }, [memberMap]);
 
-  // ✅ Step 2: filtered list
   const filteredProjects = useMemo(() => {
     const query = normalize(q);
-
     return projects.filter((p) => {
       if (activeFilter === "active" && !p.is_active) return false;
       if (activeFilter === "inactive" && p.is_active) return false;
-
       if (!query) return true;
-
       const hay = `${p.name} ${p.id}`.toLowerCase();
       return hay.includes(query);
     });
@@ -377,7 +431,56 @@ export default function ProjectsClient() {
     }
   }
 
-  // ---- UI guards ----
+  // ✅ Step 3: Drawer open + member load
+  async function openDrawer(projectId: string) {
+    setDrawerOpen(true);
+    setDrawerProjectId(projectId);
+    setDrawerMembers([]);
+    setDrawerMsg("");
+    setDrawerBusy(true);
+
+    try {
+      // Load members for the project (read-only)
+      // NOTE: Requires select access to project_members within org scope.
+      const { data, error } = await supabase
+        .from("project_members")
+        .select("profile_id, profiles:profile_id(full_name, role)")
+        .eq("project_id", projectId)
+        .eq("is_active", true);
+
+      if (error) {
+        setDrawerMsg(error.message);
+        return;
+      }
+
+      const members: DrawerMember[] =
+        (data || []).map((r: any) => ({
+          profile_id: r.profile_id,
+          full_name: r.profiles?.full_name ?? null,
+          role: r.profiles?.role ?? null,
+        })) || [];
+
+      members.sort((a, b) => (a.full_name || a.profile_id).localeCompare(b.full_name || b.profile_id));
+      setDrawerMembers(members);
+    } finally {
+      setDrawerBusy(false);
+    }
+  }
+
+  function closeDrawer() {
+    setDrawerOpen(false);
+    setDrawerProjectId("");
+    setDrawerMembers([]);
+    setDrawerMsg("");
+    setDrawerBusy(false);
+  }
+
+  const drawerProject = useMemo(() => {
+    if (!drawerProjectId) return null;
+    return projects.find((p) => p.id === drawerProjectId) || null;
+  }, [drawerProjectId, projects]);
+
+  // ---- guards ----
   if (loading) {
     return (
       <AppShell title="Projects" subtitle="Create projects and manage access">
@@ -431,7 +534,14 @@ export default function ProjectsClient() {
     <AppShell title="Projects" subtitle={subtitle} right={headerRight}>
       {/* Error banner */}
       {fetchErr ? (
-        <div className="card cardPad" style={{ borderColor: "rgba(239,68,68,0.35)", background: "rgba(239,68,68,0.06)", marginBottom: 12 }}>
+        <div
+          className="card cardPad"
+          style={{
+            borderColor: "rgba(239,68,68,0.35)",
+            background: "rgba(239,68,68,0.06)",
+            marginBottom: 12,
+          }}
+        >
           <div style={{ fontWeight: 900, marginBottom: 6 }}>Error</div>
           <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{fetchErr}</div>
         </div>
@@ -473,7 +583,7 @@ export default function ProjectsClient() {
         </div>
       ) : null}
 
-      {/* ✅ Step 2: Search + Filter bar */}
+      {/* Search + Filter bar */}
       <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -505,15 +615,9 @@ export default function ProjectsClient() {
             <Badge>Showing: {filteredProjects.length}</Badge>
           </div>
         </div>
-
-        {q || activeFilter !== "all" ? (
-          <div className="muted" style={{ marginTop: 10, fontSize: 12 }}>
-            Filters apply to both the list and access-mode project picker.
-          </div>
-        ) : null}
       </div>
 
-      {/* Admin: manage access mode (filtered) */}
+      {/* Admin: manage access mode */}
       {isAdmin && manageUserId ? (
         <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
           <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
@@ -527,7 +631,7 @@ export default function ProjectsClient() {
           </div>
 
           <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Toggle projects to grant access. Use Search + Status filters above.
+            Toggle projects to grant access. Click a project row (not the checkbox) to open details.
           </div>
 
           <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
@@ -541,6 +645,7 @@ export default function ProjectsClient() {
                 return (
                   <div
                     key={p.id}
+                    onClick={() => openDrawer(p.id)}
                     style={{
                       padding: 12,
                       border: "1px solid rgba(15,23,42,0.08)",
@@ -552,13 +657,16 @@ export default function ProjectsClient() {
                       justifyContent: "space-between",
                       gap: 12,
                       flexWrap: "wrap",
+                      cursor: "pointer",
                     }}
+                    title="Open project details"
                   >
                     <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                       <input
                         type="checkbox"
                         checked={assigned}
                         disabled={busy}
+                        onClick={(e) => e.stopPropagation()}
                         onChange={(e) => toggleAssignment(p.id, e.target.checked)}
                         style={{ width: 18, height: 18 }}
                       />
@@ -583,13 +691,13 @@ export default function ProjectsClient() {
         </div>
       ) : null}
 
-      {/* Projects list (filtered) */}
+      {/* Projects list */}
       <div className="card cardPad" style={{ maxWidth: 1100 }}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
           <div>
             <div style={{ fontWeight: 950, fontSize: 16 }}>All projects</div>
             <div className="muted" style={{ marginTop: 6 }}>
-              {manageUserId ? "Assign access above." : "Use People → Project access to assign projects to contractors."}
+              Click a row to open project details. Use People → Project access to assign members.
             </div>
           </div>
           <Badge>Showing {filteredProjects.length}</Badge>
@@ -608,6 +716,7 @@ export default function ProjectsClient() {
               return (
                 <div
                   key={p.id}
+                  onClick={() => openDrawer(p.id)}
                   style={{
                     padding: 12,
                     border: "1px solid rgba(15,23,42,0.08)",
@@ -618,7 +727,9 @@ export default function ProjectsClient() {
                     gap: 12,
                     alignItems: "center",
                     flexWrap: "wrap",
+                    cursor: "pointer",
                   }}
+                  title="Open project details"
                 >
                   <div>
                     <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -629,7 +740,10 @@ export default function ProjectsClient() {
                     <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{p.id}</div>
                   </div>
 
-                  <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  <div
+                    style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     {isAdmin ? (
                       <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                         <span className="muted" style={{ fontSize: 12, fontWeight: 800 }}>Week start</span>
@@ -660,7 +774,6 @@ export default function ProjectsClient() {
           </div>
         )}
 
-        {/* Selected project control */}
         <div style={{ marginTop: 16 }}>
           <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Selected project</div>
           <select value={selectedProjectId} onChange={(e) => setProjectInUrl(e.target.value)} style={{ maxWidth: 520 }}>
@@ -672,14 +785,140 @@ export default function ProjectsClient() {
               </option>
             ))}
           </select>
-
-          {selectedProjectId ? (
-            <div className="muted" style={{ marginTop: 8, fontSize: 12 }}>
-              Tip: When a project is selected, reports can snap week ranges to that project’s week start.
-            </div>
-          ) : null}
         </div>
       </div>
+
+      {/* ✅ Drawer */}
+      {drawerOpen && drawerProject ? (
+        <div
+          onClick={closeDrawer}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.35)",
+            zIndex: 50,
+            display: "flex",
+            justifyContent: "flex-end",
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              width: "min(520px, 92vw)",
+              height: "100%",
+              background: "white",
+              borderLeft: "1px solid rgba(15,23,42,0.10)",
+              boxShadow: "-12px 0 40px rgba(15,23,42,0.15)",
+              padding: 16,
+              display: "flex",
+              flexDirection: "column",
+              gap: 12,
+            }}
+          >
+            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+              <div>
+                <div style={{ fontSize: 16, fontWeight: 950 }}>{drawerProject.name}</div>
+                <div className="muted" style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                  {!drawerProject.is_active ? <Badge>Inactive</Badge> : <Badge>Active</Badge>}
+                  <Badge>{weekStartLabel(drawerProject.week_start)}</Badge>
+                </div>
+              </div>
+              <button className="btn" onClick={closeDrawer} aria-label="Close">
+                Close
+              </button>
+            </div>
+
+            <div className="card cardPad">
+              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Project ID</div>
+              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <code style={{ fontSize: 12 }}>{drawerProject.id}</code>
+                <button className="btn" onClick={() => copyToClipboard(drawerProject.id)}>Copy</button>
+              </div>
+            </div>
+
+            <div className="card cardPad">
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 950 }}>Settings</div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Week start affects weekly reports and timesheet week boundaries.
+                  </div>
+                </div>
+                {isAdmin ? <Badge>Admin</Badge> : <Badge>Read only</Badge>}
+              </div>
+
+              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
+                <div>
+                  <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Week start</div>
+                  <select
+                    value={(drawerProject.week_start || "sunday") as WeekStart}
+                    disabled={!isAdmin || savingWeekStartId === drawerProject.id}
+                    onChange={(e) => updateProjectWeekStart(drawerProject.id, e.target.value as WeekStart)}
+                  >
+                    <option value="sunday">Sunday</option>
+                    <option value="monday">Monday</option>
+                  </select>
+                </div>
+
+                {isAdmin ? (
+                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                    <PillButton
+                      variant="danger"
+                      disabled={busyProjectId === drawerProject.id}
+                      onClick={() => toggleProjectActive(drawerProject.id, !drawerProject.is_active)}
+                      title="Enable/disable this project"
+                    >
+                      {busyProjectId === drawerProject.id
+                        ? "Working…"
+                        : drawerProject.is_active
+                          ? "Deactivate"
+                          : "Activate"}
+                    </PillButton>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="card cardPad" style={{ flex: 1, overflow: "auto" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontWeight: 950 }}>Members</div>
+                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                    Read-only list for now (member management is the next step).
+                  </div>
+                </div>
+                <Badge>{drawerMembers.length}</Badge>
+              </div>
+
+              {drawerMsg ? (
+                <div style={{ marginTop: 10, color: "#b91c1c", fontSize: 13, whiteSpace: "pre-wrap" }}>{drawerMsg}</div>
+              ) : null}
+
+              {drawerBusy ? (
+                <div className="muted" style={{ marginTop: 12 }}>Loading members…</div>
+              ) : drawerMembers.length === 0 ? (
+                <div className="muted" style={{ marginTop: 12 }}>No active members on this project.</div>
+              ) : (
+                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                  {drawerMembers.map((m) => (
+                    <div key={m.profile_id} style={{ padding: 10, border: "1px solid rgba(15,23,42,0.08)", borderRadius: 12 }}>
+                      <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <span>{m.full_name || m.profile_id}</span>
+                        {m.role ? <Badge>{m.role}</Badge> : null}
+                      </div>
+                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{m.profile_id}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            <div className="muted" style={{ fontSize: 12 }}>
+              Tip: Next step will add “Manage members” inside this drawer for Admins.
+            </div>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 }

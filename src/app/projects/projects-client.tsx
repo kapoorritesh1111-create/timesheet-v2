@@ -1,3 +1,4 @@
+// src/app/projects/projects-client.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
@@ -35,64 +36,6 @@ type DrawerMember = {
   role: string | null;
 };
 
-function Badge({ children }: { children: React.ReactNode }) {
-  return (
-    <span
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "4px 10px",
-        borderRadius: 999,
-        border: "1px solid rgba(15,23,42,0.10)",
-        background: "rgba(255,255,255,0.9)",
-        fontSize: 12,
-        fontWeight: 700,
-        color: "rgba(15,23,42,0.75)",
-      }}
-    >
-      {children}
-    </span>
-  );
-}
-
-function PillButton({
-  children,
-  onClick,
-  disabled,
-  title,
-  variant,
-}: {
-  children: React.ReactNode;
-  onClick: () => void;
-  disabled?: boolean;
-  title?: string;
-  variant?: "primary" | "default" | "danger";
-}) {
-  const base: React.CSSProperties = {
-    padding: "10px 12px",
-    borderRadius: 12,
-    border: "1px solid rgba(15,23,42,0.10)",
-    background: "white",
-    fontWeight: 850,
-    cursor: disabled ? "not-allowed" : "pointer",
-    opacity: disabled ? 0.6 : 1,
-  };
-
-  const style: React.CSSProperties =
-    variant === "primary"
-      ? { ...base, borderColor: "rgba(37,99,235,0.25)", boxShadow: "0 1px 0 rgba(15,23,42,0.03)" }
-      : variant === "danger"
-        ? { ...base, borderColor: "rgba(239,68,68,0.25)" }
-        : base;
-
-  return (
-    <button className="btn" style={style} onClick={onClick} disabled={disabled} title={title}>
-      {children}
-    </button>
-  );
-}
-
 function weekStartLabel(ws?: WeekStart | null) {
   const v = ws || "sunday";
   return v === "monday" ? "Week starts Monday" : "Week starts Sunday";
@@ -106,7 +49,7 @@ function copyToClipboard(text: string) {
   try {
     navigator.clipboard.writeText(text);
   } catch {
-    // ignore (some browsers)
+    // ignore
   }
 }
 
@@ -138,7 +81,7 @@ export default function ProjectsClient() {
   const [q, setQ] = useState("");
   const [activeFilter, setActiveFilter] = useState<ActiveFilter>("all");
 
-  // ✅ Drawer state
+  // Drawer state
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerProjectId, setDrawerProjectId] = useState<string>("");
   const [drawerMembers, setDrawerMembers] = useState<DrawerMember[]>([]);
@@ -148,10 +91,18 @@ export default function ProjectsClient() {
   const isAdmin = profile?.role === "admin";
   const isManagerOrAdmin = profile?.role === "admin" || profile?.role === "manager";
 
+  function tag(text: string, kind?: "ok" | "warn" | "muted") {
+    const cls = kind === "ok" ? "tag tagOk" : kind === "warn" ? "tag tagWarn" : "tag";
+    return <span className={cls}>{text}</span>;
+  }
+
   function setProjectInUrl(projectId: string) {
-    const base = manageUserId ? `/projects?user=${encodeURIComponent(manageUserId)}` : "/projects";
-    const url = projectId ? `${base}&project=${encodeURIComponent(projectId)}` : base;
-    router.replace(url);
+    // Fix: ensure proper ? / & handling
+    const params = new URLSearchParams();
+    if (manageUserId) params.set("user", manageUserId);
+    if (projectId) params.set("project", projectId);
+    const qs = params.toString();
+    router.replace(qs ? `/projects?${qs}` : "/projects");
   }
 
   async function reloadProjects() {
@@ -389,11 +340,7 @@ export default function ProjectsClient() {
     setFetchErr("");
 
     try {
-      const { error } = await supabase
-        .from("projects")
-        .update({ is_active: nextActive })
-        .eq("id", projectId)
-        .eq("org_id", profile.org_id);
+      const { error } = await supabase.from("projects").update({ is_active: nextActive }).eq("id", projectId).eq("org_id", profile.org_id);
 
       if (error) {
         setFetchErr(error.message);
@@ -414,11 +361,7 @@ export default function ProjectsClient() {
     setFetchErr("");
 
     try {
-      const { error } = await supabase
-        .from("projects")
-        .update({ week_start: weekStart })
-        .eq("id", projectId)
-        .eq("org_id", profile.org_id);
+      const { error } = await supabase.from("projects").update({ week_start: weekStart }).eq("id", projectId).eq("org_id", profile.org_id);
 
       if (error) {
         setFetchErr(error.message);
@@ -431,7 +374,6 @@ export default function ProjectsClient() {
     }
   }
 
-  // ✅ Step 3: Drawer open + member load
   async function openDrawer(projectId: string) {
     setDrawerOpen(true);
     setDrawerProjectId(projectId);
@@ -440,8 +382,6 @@ export default function ProjectsClient() {
     setDrawerBusy(true);
 
     try {
-      // Load members for the project (read-only)
-      // NOTE: Requires select access to project_members within org scope.
       const { data, error } = await supabase
         .from("project_members")
         .select("profile_id, profiles:profile_id(full_name, role)")
@@ -493,8 +433,8 @@ export default function ProjectsClient() {
     return (
       <AppShell title="Projects" subtitle="Create projects and manage access">
         <div className="card cardPad">
-          <div style={{ fontWeight: 900, marginBottom: 8 }}>Please log in.</div>
-          <button className="btn btnPrimary" onClick={() => router.push("/login")}>
+          <div style={{ fontWeight: 950, marginBottom: 8 }}>Please log in.</div>
+          <button className="btnPrimary" onClick={() => router.push("/login")}>
             Go to Login
           </button>
         </div>
@@ -505,8 +445,8 @@ export default function ProjectsClient() {
   if (!profile) {
     return (
       <AppShell title="Projects" subtitle="Create projects and manage access">
-        <div className="card cardPad">
-          <div style={{ fontWeight: 900 }}>Logged in, but profile could not be loaded.</div>
+        <div className="alert alertWarn">
+          <div style={{ fontWeight: 950 }}>Logged in, but profile could not be loaded.</div>
           <pre style={{ whiteSpace: "pre-wrap", marginTop: 10 }}>{profErr || "No details."}</pre>
         </div>
       </AppShell>
@@ -514,13 +454,13 @@ export default function ProjectsClient() {
   }
 
   const headerRight = (
-    <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+    <div className="prHeaderRight">
       {manageUserId ? (
         <>
-          <button className="btn" onClick={() => router.push("/profiles")}>
+          <button className="pill" onClick={() => router.push("/profiles")}>
             Back to People
           </button>
-          <button className="btn" onClick={() => router.replace("/projects")}>
+          <button className="pill" onClick={() => router.replace("/projects")}>
             Exit Access Mode
           </button>
         </>
@@ -532,50 +472,41 @@ export default function ProjectsClient() {
 
   return (
     <AppShell title="Projects" subtitle={subtitle} right={headerRight}>
-      {/* Error banner */}
       {fetchErr ? (
-        <div
-          className="card cardPad"
-          style={{
-            borderColor: "rgba(239,68,68,0.35)",
-            background: "rgba(239,68,68,0.06)",
-            marginBottom: 12,
-          }}
-        >
-          <div style={{ fontWeight: 900, marginBottom: 6 }}>Error</div>
-          <div style={{ whiteSpace: "pre-wrap", fontSize: 13 }}>{fetchErr}</div>
+        <div className="alert alertInfo">
+          <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{fetchErr}</pre>
         </div>
       ) : null}
 
       {/* Admin: create project */}
       {isAdmin && !manageUserId ? (
-        <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+        <div className="card cardPad prShell" style={{ marginTop: 14 }}>
+          <div className="prCardHeader">
             <div>
-              <div style={{ fontWeight: 950, fontSize: 16 }}>Create project</div>
-              <div className="muted" style={{ marginTop: 6 }}>
+              <div className="prTitle">Create project</div>
+              <div className="muted prSub">
                 Project-level settings (like week start) are used across reports and timesheets.
               </div>
             </div>
-            <Badge>Admin</Badge>
+            {tag("Admin")}
           </div>
 
-          <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr auto", gap: 12, marginTop: 12 }}>
+          <div className="prCreateGrid">
             <div>
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Project name</div>
+              <div className="prLabel">Project name</div>
               <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Retail KPI Dashboard" />
             </div>
 
             <div>
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Week start</div>
+              <div className="prLabel">Week start</div>
               <select value={newWeekStart} onChange={(e) => setNewWeekStart(e.target.value as WeekStart)}>
                 <option value="sunday">Sunday</option>
                 <option value="monday">Monday</option>
               </select>
             </div>
 
-            <div style={{ display: "flex", alignItems: "end" }}>
-              <button className="btn btnPrimary" onClick={createProject} disabled={createBusy || newName.trim().length < 2}>
+            <div className="prCreateBtnWrap">
+              <button className="btnPrimary" onClick={createProject} disabled={createBusy || newName.trim().length < 2}>
                 {createBusy ? "Creating…" : "Create"}
               </button>
             </div>
@@ -584,16 +515,16 @@ export default function ProjectsClient() {
       ) : null}
 
       {/* Search + Filter bar */}
-      <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-            <div style={{ minWidth: 260 }}>
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Search</div>
+      <div className="card cardPad prShell" style={{ marginTop: 14 }}>
+        <div className="prFilters">
+          <div className="prFiltersLeft">
+            <div className="prField prSearch">
+              <div className="prLabel">Search</div>
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name or ID…" />
             </div>
 
-            <div style={{ minWidth: 180 }}>
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Status</div>
+            <div className="prField">
+              <div className="prLabel">Status</div>
               <select value={activeFilter} onChange={(e) => setActiveFilter(e.target.value as ActiveFilter)}>
                 <option value="all">All</option>
                 <option value="active">Active only</option>
@@ -601,40 +532,40 @@ export default function ProjectsClient() {
               </select>
             </div>
 
-            <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
-              <button className="btn" onClick={() => { setQ(""); setActiveFilter("all"); }}>
+            <div className="prClearWrap">
+              <button className="pill" onClick={() => { setQ(""); setActiveFilter("all"); }}>
                 Clear
               </button>
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "flex-end" }}>
-            <Badge>Total: {counts.total}</Badge>
-            <Badge>Active: {counts.active}</Badge>
-            <Badge>Inactive: {counts.inactive}</Badge>
-            <Badge>Showing: {filteredProjects.length}</Badge>
+          <div className="prFiltersRight">
+            {tag(`Total: ${counts.total}`)}
+            {tag(`Active: ${counts.active}`, "ok")}
+            {tag(`Inactive: ${counts.inactive}`, "muted")}
+            {tag(`Showing: ${filteredProjects.length}`)}
           </div>
         </div>
       </div>
 
-      {/* Admin: manage access mode */}
+      {/* Admin access mode */}
       {isAdmin && manageUserId ? (
-        <div className="card cardPad" style={{ marginBottom: 12, maxWidth: 1100 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+        <div className="card cardPad prShell" style={{ marginTop: 14 }}>
+          <div className="prCardHeader">
             <div>
-              <div style={{ fontWeight: 950, fontSize: 16 }}>Manage project access</div>
-              <div className="muted" style={{ marginTop: 6 }}>
+              <div className="prTitle">Manage project access</div>
+              <div className="muted prSub">
                 User: <b>{manageUser?.full_name || manageUserId}</b> {manageUser?.role ? `(${manageUser.role})` : ""}
               </div>
             </div>
-            <Badge>Grant / remove access</Badge>
+            {tag("Grant / remove access")}
           </div>
 
           <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-            Toggle projects to grant access. Click a project row (not the checkbox) to open details.
+            Toggle projects to grant access. Click a project row to open details.
           </div>
 
-          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div className="prList" style={{ marginTop: 12 }}>
             {filteredProjects.length === 0 ? (
               <div className="muted">No projects match your filters.</div>
             ) : (
@@ -643,46 +574,28 @@ export default function ProjectsClient() {
                 const busy = busyProjectId === p.id;
 
                 return (
-                  <div
-                    key={p.id}
-                    onClick={() => openDrawer(p.id)}
-                    style={{
-                      padding: 12,
-                      border: "1px solid rgba(15,23,42,0.08)",
-                      borderRadius: 14,
-                      background: p.is_active ? "white" : "rgba(15,23,42,0.02)",
-                      opacity: p.is_active ? 1 : 0.85,
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      gap: 12,
-                      flexWrap: "wrap",
-                      cursor: "pointer",
-                    }}
-                    title="Open project details"
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  <div key={p.id} className={`prRow ${!p.is_active ? "prRowInactive" : ""}`} onClick={() => openDrawer(p.id)}>
+                    <div className="prRowLeft">
                       <input
                         type="checkbox"
                         checked={assigned}
                         disabled={busy}
                         onClick={(e) => e.stopPropagation()}
                         onChange={(e) => toggleAssignment(p.id, e.target.checked)}
-                        style={{ width: 18, height: 18 }}
+                        className="prCheck"
+                        aria-label="Toggle assignment"
                       />
                       <div>
-                        <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+                        <div className="prRowTitle">
                           <span>{p.name}</span>
-                          {!p.is_active ? <Badge>Inactive</Badge> : null}
-                          <Badge>{weekStartLabel(p.week_start)}</Badge>
+                          {!p.is_active ? tag("Inactive", "warn") : null}
+                          {tag(weekStartLabel(p.week_start))}
                         </div>
-                        <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{p.id}</div>
+                        <div className="prRowMeta muted">{p.id}</div>
                       </div>
                     </div>
 
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {busy ? "Updating…" : assigned ? "Assigned" : "Not assigned"}
-                    </div>
+                    <div className="prRowRight muted">{busy ? "Updating…" : assigned ? "Assigned" : "Not assigned"}</div>
                   </div>
                 );
               })
@@ -692,15 +605,15 @@ export default function ProjectsClient() {
       ) : null}
 
       {/* Projects list */}
-      <div className="card cardPad" style={{ maxWidth: 1100 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline", flexWrap: "wrap" }}>
+      <div className="card cardPad prShell" style={{ marginTop: 14 }}>
+        <div className="prCardHeader">
           <div>
-            <div style={{ fontWeight: 950, fontSize: 16 }}>All projects</div>
-            <div className="muted" style={{ marginTop: 6 }}>
+            <div className="prTitle">All projects</div>
+            <div className="muted prSub">
               Click a row to open project details. Use People → Project access to assign members.
             </div>
           </div>
-          <Badge>Showing {filteredProjects.length}</Badge>
+          {tag(`Showing ${filteredProjects.length}`)}
         </div>
 
         {filteredProjects.length === 0 ? (
@@ -708,62 +621,47 @@ export default function ProjectsClient() {
             No projects match your filters.
           </div>
         ) : (
-          <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+          <div className="prList" style={{ marginTop: 12 }}>
             {filteredProjects.map((p) => {
               const busy = busyProjectId === p.id;
               const savingWs = savingWeekStartId === p.id;
 
               return (
-                <div
-                  key={p.id}
-                  onClick={() => openDrawer(p.id)}
-                  style={{
-                    padding: 12,
-                    border: "1px solid rgba(15,23,42,0.08)",
-                    borderRadius: 14,
-                    background: "white",
-                    display: "flex",
-                    justifyContent: "space-between",
-                    gap: 12,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    cursor: "pointer",
-                  }}
-                  title="Open project details"
-                >
-                  <div>
-                    <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                      <span>{p.name}</span>
-                      {!p.is_active ? <Badge>Inactive</Badge> : null}
-                      <Badge>{weekStartLabel(p.week_start)}</Badge>
+                <div key={p.id} className="prRow" onClick={() => openDrawer(p.id)} title="Open project details">
+                  <div className="prRowLeft">
+                    <div className="prDot" aria-hidden />
+                    <div>
+                      <div className="prRowTitle">
+                        <span>{p.name}</span>
+                        {!p.is_active ? tag("Inactive", "warn") : null}
+                        {tag(weekStartLabel(p.week_start))}
+                      </div>
+                      <div className="prRowMeta muted">{p.id}</div>
                     </div>
-                    <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{p.id}</div>
                   </div>
 
-                  <div
-                    style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", justifyContent: "flex-end" }}
-                    onClick={(e) => e.stopPropagation()}
-                  >
+                  <div className="prRowActions" onClick={(e) => e.stopPropagation()}>
                     {isAdmin ? (
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                        <span className="muted" style={{ fontSize: 12, fontWeight: 800 }}>Week start</span>
+                      <div className="prInline">
+                        <span className="muted prInlineLabel">Week start</span>
                         <select
                           value={(p.week_start || "sunday") as WeekStart}
                           disabled={savingWs}
                           onChange={(e) => updateProjectWeekStart(p.id, e.target.value as WeekStart)}
-                          style={{ minWidth: 130 }}
                         >
                           <option value="sunday">Sunday</option>
                           <option value="monday">Monday</option>
                         </select>
-                        <span className="muted" style={{ fontSize: 12, minWidth: 70 }}>{savingWs ? "Saving…" : ""}</span>
+                        <span className="muted prInlineSaving">{savingWs ? "Saving…" : ""}</span>
                       </div>
                     ) : null}
 
-                    <button className="btn" onClick={() => setProjectInUrl(p.id)}>Select</button>
+                    <button className="pill" onClick={() => setProjectInUrl(p.id)}>
+                      Select
+                    </button>
 
                     {isAdmin ? (
-                      <button className="btn" disabled={busy} onClick={() => toggleProjectActive(p.id, !p.is_active)}>
+                      <button className="pill" disabled={busy} onClick={() => toggleProjectActive(p.id, !p.is_active)}>
                         {busy ? "Working…" : p.is_active ? "Deactivate" : "Activate"}
                       </button>
                     ) : null}
@@ -774,9 +672,9 @@ export default function ProjectsClient() {
           </div>
         )}
 
-        <div style={{ marginTop: 16 }}>
-          <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Selected project</div>
-          <select value={selectedProjectId} onChange={(e) => setProjectInUrl(e.target.value)} style={{ maxWidth: 520 }}>
+        <div className="prSelected">
+          <div className="prLabel">Selected project</div>
+          <select value={selectedProjectId} onChange={(e) => setProjectInUrl(e.target.value)} className="prSelectedSelect">
             <option value="">— Select a project —</option>
             {filteredProjects.map((p) => (
               <option key={p.id} value={p.id}>
@@ -788,68 +686,47 @@ export default function ProjectsClient() {
         </div>
       </div>
 
-      {/* ✅ Drawer */}
+      {/* Drawer */}
       {drawerOpen && drawerProject ? (
-        <div
-          onClick={closeDrawer}
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,23,42,0.35)",
-            zIndex: 50,
-            display: "flex",
-            justifyContent: "flex-end",
-          }}
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            style={{
-              width: "min(520px, 92vw)",
-              height: "100%",
-              background: "white",
-              borderLeft: "1px solid rgba(15,23,42,0.10)",
-              boxShadow: "-12px 0 40px rgba(15,23,42,0.15)",
-              padding: 16,
-              display: "flex",
-              flexDirection: "column",
-              gap: 12,
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "flex-start" }}>
+        <div className="prDrawerOverlay" onClick={closeDrawer}>
+          <div className="prDrawer" onClick={(e) => e.stopPropagation()}>
+            <div className="prDrawerHeader">
               <div>
-                <div style={{ fontSize: 16, fontWeight: 950 }}>{drawerProject.name}</div>
-                <div className="muted" style={{ marginTop: 6, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-                  {!drawerProject.is_active ? <Badge>Inactive</Badge> : <Badge>Active</Badge>}
-                  <Badge>{weekStartLabel(drawerProject.week_start)}</Badge>
+                <div className="prDrawerTitle">{drawerProject.name}</div>
+                <div className="prDrawerTags">
+                  {drawerProject.is_active ? tag("Active", "ok") : tag("Inactive", "warn")}
+                  {tag(weekStartLabel(drawerProject.week_start))}
                 </div>
               </div>
-              <button className="btn" onClick={closeDrawer} aria-label="Close">
+              <button className="pill" onClick={closeDrawer} aria-label="Close">
                 Close
               </button>
             </div>
 
             <div className="card cardPad">
-              <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Project ID</div>
-              <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                <code style={{ fontSize: 12 }}>{drawerProject.id}</code>
-                <button className="btn" onClick={() => copyToClipboard(drawerProject.id)}>Copy</button>
+              <div className="prLabel">Project ID</div>
+              <div className="prIdRow">
+                <code className="prCode">{drawerProject.id}</code>
+                <button className="pill" onClick={() => copyToClipboard(drawerProject.id)}>
+                  Copy
+                </button>
               </div>
             </div>
 
             <div className="card cardPad">
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div className="prCardHeader">
                 <div>
-                  <div style={{ fontWeight: 950 }}>Settings</div>
-                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
+                  <div className="prTitle" style={{ fontSize: 14 }}>Settings</div>
+                  <div className="muted prSub" style={{ marginTop: 4 }}>
                     Week start affects weekly reports and timesheet week boundaries.
                   </div>
                 </div>
-                {isAdmin ? <Badge>Admin</Badge> : <Badge>Read only</Badge>}
+                {isAdmin ? tag("Admin") : tag("Read only")}
               </div>
 
-              <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1fr auto", gap: 10, alignItems: "end" }}>
+              <div className="prDrawerSettings">
                 <div>
-                  <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Week start</div>
+                  <div className="prLabel">Week start</div>
                   <select
                     value={(drawerProject.week_start || "sunday") as WeekStart}
                     disabled={!isAdmin || savingWeekStartId === drawerProject.id}
@@ -861,37 +738,33 @@ export default function ProjectsClient() {
                 </div>
 
                 {isAdmin ? (
-                  <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
-                    <PillButton
-                      variant="danger"
+                  <div className="prDrawerActions">
+                    <button
+                      className="pill"
                       disabled={busyProjectId === drawerProject.id}
                       onClick={() => toggleProjectActive(drawerProject.id, !drawerProject.is_active)}
                       title="Enable/disable this project"
                     >
-                      {busyProjectId === drawerProject.id
-                        ? "Working…"
-                        : drawerProject.is_active
-                          ? "Deactivate"
-                          : "Activate"}
-                    </PillButton>
+                      {busyProjectId === drawerProject.id ? "Working…" : drawerProject.is_active ? "Deactivate" : "Activate"}
+                    </button>
                   </div>
                 ) : null}
               </div>
             </div>
 
-            <div className="card cardPad" style={{ flex: 1, overflow: "auto" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "baseline", flexWrap: "wrap" }}>
+            <div className="card cardPad prDrawerMembers">
+              <div className="prCardHeader">
                 <div>
-                  <div style={{ fontWeight: 950 }}>Members</div>
-                  <div className="muted" style={{ marginTop: 4, fontSize: 12 }}>
-                    Read-only list for now (member management is the next step).
-                  </div>
+                  <div className="prTitle">Members</div>
+                  <div className="muted prSub">Read-only list for now (member management is next).</div>
                 </div>
-                <Badge>{drawerMembers.length}</Badge>
+                {tag(String(drawerMembers.length))}
               </div>
 
               {drawerMsg ? (
-                <div style={{ marginTop: 10, color: "#b91c1c", fontSize: 13, whiteSpace: "pre-wrap" }}>{drawerMsg}</div>
+                <div className="alert alertInfo" style={{ marginTop: 10 }}>
+                  <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{drawerMsg}</pre>
+                </div>
               ) : null}
 
               {drawerBusy ? (
@@ -899,21 +772,21 @@ export default function ProjectsClient() {
               ) : drawerMembers.length === 0 ? (
                 <div className="muted" style={{ marginTop: 12 }}>No active members on this project.</div>
               ) : (
-                <div style={{ marginTop: 12, display: "grid", gap: 10 }}>
+                <div className="prMemberList" style={{ marginTop: 12 }}>
                   {drawerMembers.map((m) => (
-                    <div key={m.profile_id} style={{ padding: 10, border: "1px solid rgba(15,23,42,0.08)", borderRadius: 12 }}>
-                      <div style={{ fontWeight: 900, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-                        <span>{m.full_name || m.profile_id}</span>
-                        {m.role ? <Badge>{m.role}</Badge> : null}
+                    <div key={m.profile_id} className="prMemberRow">
+                      <div className="prMemberTop">
+                        <span className="prMemberName">{m.full_name || m.profile_id}</span>
+                        {m.role ? tag(m.role) : null}
                       </div>
-                      <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{m.profile_id}</div>
+                      <div className="muted prMemberId">{m.profile_id}</div>
                     </div>
                   ))}
                 </div>
               )}
             </div>
 
-            <div className="muted" style={{ fontSize: 12 }}>
+            <div className="muted prDrawerFooter">
               Tip: Next step will add “Manage members” inside this drawer for Admins.
             </div>
           </div>

@@ -20,25 +20,25 @@ export default function TopNav() {
   const pathname = usePathname();
   const { profile } = useProfile();
 
-  // Hide nav on auth pages
-  if (pathname === "/login" || pathname === "/reset" || pathname === "/") return null;
+  // Hide nav on auth + landing + onboarding
+  if (pathname === "/login" || pathname === "/reset" || pathname === "/" || pathname === "/onboarding") return null;
 
   const role = (profile?.role || "").toLowerCase();
   const isAdmin = role === "admin";
   const isManager = role === "manager";
   const isManagerOrAdmin = isAdmin || isManager;
 
-  const links: Array<{ href: string; label: string; show?: boolean }> = [
-    { href: "/dashboard", label: "Dashboard" },
-    { href: "/timesheet", label: "Timesheet" },
-    { href: "/approvals", label: "Approvals", show: isManagerOrAdmin },
+  const links: Array<{ href: string; label: string; show?: boolean; match?: "exact" | "prefix" }> = [
+    { href: "/dashboard", label: "Dashboard", match: "exact" },
+    { href: "/timesheet", label: "Timesheet", match: "exact" },
+    { href: "/approvals", label: "Approvals", show: isManagerOrAdmin, match: "exact" },
 
-    // v1.3: payroll reporting (RLS scopes what each role sees)
-    { href: "/reports/payroll", label: "Payroll", show: true },
+    // reporting (nested routes should stay active)
+    { href: "/reports/payroll", label: "Payroll", show: true, match: "prefix" },
 
-    { href: "/projects", label: "Projects" },
-    { href: "/profiles", label: "Profiles", show: isAdmin },
-    { href: "/admin", label: "Admin", show: isAdmin },
+    { href: "/projects", label: "Projects", match: "exact" },
+    { href: "/profiles", label: "Profiles", show: isAdmin, match: "exact" },
+    { href: "/admin", label: "Admin", show: isAdmin, match: "exact" },
   ];
 
   return (
@@ -56,7 +56,9 @@ export default function TopNav() {
           {links
             .filter((l) => l.show !== false)
             .map((l) => {
-              const active = pathname === l.href;
+              const active =
+                l.match === "prefix" ? pathname === l.href || pathname.startsWith(l.href + "/") : pathname === l.href;
+
               return (
                 <Link key={l.href} href={l.href} className={active ? "pill pillActive" : "pill"}>
                   {l.label}

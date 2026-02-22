@@ -2,8 +2,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import RequireOnboarding from "../../components/auth/RequireOnboarding";
+import AppShell from "../../components/layout/AppShell";
 import { supabase } from "../../lib/supabaseBrowser";
 import { useProfile } from "../../lib/useProfile";
 import { addDays, formatShort, startOfWeekSunday, toISODate, weekRangeLabel } from "../../lib/date";
@@ -56,8 +56,20 @@ function normalizeHHMM(s: string): string {
   return `${h}:${m}`;
 }
 
+function StatusPill({ status }: { status: EntryStatus | undefined }) {
+  const s = (status ?? "draft") as EntryStatus;
+  const cls =
+    s === "approved"
+      ? "statusPill statusApproved"
+      : s === "submitted"
+        ? "statusPill statusSubmitted"
+        : s === "rejected"
+          ? "statusPill statusRejected"
+          : "statusPill statusDraft";
+  return <span className={cls}>{s}</span>;
+}
+
 function TimesheetInner() {
-  const router = useRouter();
   const { loading: profLoading, profile, userId } = useProfile();
 
   const [weekStart, setWeekStart] = useState<Date>(() => startOfWeekSunday(new Date()));
@@ -87,7 +99,7 @@ function TimesheetInner() {
 
       // PROJECTS (STRICT)
       // - Admin/Manager: org active projects
-      // - Contractor: ONLY membership-based projects (no fallback)
+      // - Contractor: ONLY membership-based projects
       try {
         if (isManagerOrAdmin) {
           const { data: projRows, error: projErr } = await supabase
@@ -113,14 +125,10 @@ function TimesheetInner() {
               setMsg(pmErr.message);
               setProjects([]);
             } else {
-              const list = (((pm as any) ?? []) as any[])
-                .map((x) => x.projects)
-                .filter(Boolean) as Project[];
-
+              const list = (((pm as any) ?? []) as any[]).map((x) => x.projects).filter(Boolean) as Project[];
               const uniq = Array.from(new Map(list.map((p) => [p.id, p])).values())
                 .filter((p) => p.is_active !== false)
                 .sort((a, b) => a.name.localeCompare(b.name));
-
               setProjects(uniq);
             }
           }
@@ -342,221 +350,206 @@ function TimesheetInner() {
     }
   }
 
-  async function logout() {
-    await supabase.auth.signOut();
-    router.push("/login");
-  }
+  const headerSubtitle = profile
+    ? `${weekRangeLabel(weekStart)} • Role: ${profile.role}`
+    : `${weekRangeLabel(weekStart)}`;
+
+  const headerRight = (
+    <div className="tsHeaderRight">
+      <div className="tsWeekNav">
+        <button
+          className="pill"
+          onClick={() => setWeekStart((d) => addDays(d, -7))}
+          disabled={busy || loadingWeek}
+          title="Previous week"
+        >
+          ← Prev
+        </button>
+        <button
+          className="pill"
+          onClick={() => setWeekStart(startOfWeekSunday(new Date()))}
+          disabled={busy || loadingWeek}
+          title="Jump to current week"
+        >
+          This week
+        </button>
+        <button
+          className="pill"
+          onClick={() => setWeekStart((d) => addDays(d, 7))}
+          disabled={busy || loadingWeek}
+          title="Next week"
+        >
+          Next →
+        </button>
+      </div>
+
+      <div className="tsActions">
+        <button disabled={busy || loadingWeek} onClick={saveDraft}>
+          {busy ? "Saving…" : "Save Draft"}
+        </button>
+        <button className="btnPrimary" disabled={busy || loadingWeek} onClick={submitWeek}>
+          {busy ? "Working…" : "Submit Week"}
+        </button>
+      </div>
+    </div>
+  );
 
   if (profLoading) {
     return (
-      <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-        <h1 style={{ margin: 0 }}>Timesheet</h1>
-        <p>Loading…</p>
-      </main>
+      <AppShell title="Weekly Timesheet" subtitle="Loading profile…">
+        <div className="card cardPad">
+          <div className="muted">Loading…</div>
+        </div>
+      </AppShell>
     );
   }
 
   if (!profile || !userId) return null;
 
   return (
-    <main style={{ maxWidth: 1100, margin: "24px auto", padding: 16 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
-        <div>
-          <h1 style={{ margin: 0 }}>Weekly Timesheet</h1>
-          <div style={{ opacity: 0.75, marginTop: 6 }}>
-            {weekRangeLabel(weekStart)} • Role: {profile.role}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", justifyContent: "flex-end" }}>
-          <button onClick={() => router.push("/dashboard")}>Dashboard</button>
-          {isManagerOrAdmin ? <button onClick={() => router.push("/approvals")}>Approvals</button> : null}
-          <button onClick={() => router.push("/projects")}>Projects</button>
-          <button onClick={() => router.push("/profiles")}>Profiles</button>
-          {profile.role === "admin" ? <button onClick={() => router.push("/admin")}>Admin</button> : null}
-          <button onClick={logout}>Logout</button>
-        </div>
-      </div>
-
+    <AppShell title="Weekly Timesheet" subtitle={headerSubtitle} right={headerRight}>
       {msg ? (
-        <div style={{ marginTop: 12, padding: 12, border: "1px solid #eee", borderRadius: 12, background: "#fafafa" }}>
+        <div className="alert alertInfo">
           <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{msg}</pre>
         </div>
       ) : null}
 
       {isContractor && projects.length === 0 ? (
-        <div style={{ marginTop: 14, padding: 14, border: "1px solid #ffd7a8", borderRadius: 14, background: "#fff7ed" }}>
-          <div style={{ fontWeight: 900 }}>No projects assigned</div>
-          <div style={{ marginTop: 6, opacity: 0.85 }}>
+        <div className="alert alertWarn">
+          <div style={{ fontWeight: 950 }}>No projects assigned</div>
+          <div className="muted" style={{ marginTop: 6 }}>
             You can’t submit time until an admin assigns at least one project.
-          </div>
-          <div style={{ marginTop: 10, display: "flex", gap: 10, flexWrap: "wrap" }}>
-            <button onClick={() => router.push("/profiles")}>Go to Profiles</button>
-            <button onClick={() => router.push("/projects")}>Go to Projects</button>
           </div>
         </div>
       ) : null}
 
-      <div style={{ marginTop: 14, display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <button onClick={() => setWeekStart((d) => addDays(d, -7))}>← Prev</button>
-        <button onClick={() => setWeekStart(startOfWeekSunday(new Date()))}>This week</button>
-        <button onClick={() => setWeekStart((d) => addDays(d, 7))}>Next →</button>
-
-        <div style={{ marginLeft: "auto", display: "flex", gap: 10 }}>
-          <button disabled={busy || loadingWeek} onClick={saveDraft}>
-            {busy ? "Saving…" : "Save Draft"}
-          </button>
-          <button disabled={busy || loadingWeek} onClick={submitWeek} style={{ fontWeight: 800 }}>
-            {busy ? "Working…" : "Submit Week"}
-          </button>
-        </div>
-      </div>
-
-      <div style={{ marginTop: 14, padding: 12, border: "1px solid #eee", borderRadius: 14 }}>
-        <div style={{ fontWeight: 800 }}>Week total: {weekTotal.toFixed(2)} hrs</div>
-        <div style={{ opacity: 0.7, marginTop: 4 }}>
-          Add multiple lines per day. Submitted/approved lines lock automatically.
+      <div className="card cardPad tsSummary">
+        <div className="tsSummaryRow">
+          <div>
+            <div className="tsSummaryTitle">Week total</div>
+            <div className="tsSummaryValue">{weekTotal.toFixed(2)} hrs</div>
+          </div>
+          <div className="muted tsSummaryHint">Tip: Add multiple lines per day. Submitted/approved lines lock.</div>
         </div>
       </div>
 
       {loadingWeek ? (
-        <div style={{ marginTop: 14 }}>Loading week…</div>
+        <div className="card cardPad" style={{ marginTop: 14 }}>
+          <div className="muted">Loading week…</div>
+        </div>
       ) : (
-        <div style={{ marginTop: 14 }}>
+        <div className="tsDays">
           {weekDays.map((day) => {
             const dayISO = toISODate(day);
             const dayRows = rows.filter((r) => r.entry_date === dayISO);
 
             return (
-              <section key={dayISO} style={{ marginBottom: 14, border: "1px solid #eee", borderRadius: 14, padding: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10 }}>
-                  <div style={{ fontSize: 16, fontWeight: 900 }}>
-                    {formatShort(day)} <span style={{ opacity: 0.7 }}>({dayISO})</span>
+              <section key={dayISO} className="card cardPad tsDayCard">
+                <div className="tsDayHeader">
+                  <div className="tsDayTitle">
+                    {formatShort(day)} <span className="muted">({dayISO})</span>
                   </div>
-                  <div style={{ fontWeight: 800 }}>Day total: {(hoursByDay[dayISO] ?? 0).toFixed(2)} hrs</div>
+                  <div className="tsDayTotal">Day total: {(hoursByDay[dayISO] ?? 0).toFixed(2)} hrs</div>
                 </div>
 
-                <div style={{ marginTop: 10 }}>
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "220px 90px 90px 90px 1fr 90px 90px",
-                      gap: 8,
-                      fontWeight: 800,
-                      opacity: 0.8,
-                    }}
-                  >
-                    <div>Project</div>
-                    <div>In</div>
-                    <div>Out</div>
-                    <div>Lunch</div>
-                    <div>Notes</div>
-                    <div>Miles</div>
-                    <div>Status</div>
-                  </div>
+                <div className="tsGridHead">
+                  <div>Project</div>
+                  <div>In</div>
+                  <div>Out</div>
+                  <div>Lunch</div>
+                  <div>Notes</div>
+                  <div>Miles</div>
+                  <div>Status</div>
+                </div>
 
-                  {dayRows.length === 0 ? <div style={{ marginTop: 10, opacity: 0.75 }}>No lines for this day.</div> : null}
+                {dayRows.length === 0 ? <div className="muted" style={{ marginTop: 10 }}>No lines for this day.</div> : null}
 
-                  {dayRows.map((r) => {
-                    const locked = r.status === "submitted" || r.status === "approved";
+                {dayRows.map((r) => {
+                  const locked = r.status === "submitted" || r.status === "approved";
 
-                    return (
-                      <div
-                        key={r.tempId}
-                        style={{
-                          marginTop: 8,
-                          display: "grid",
-                          gridTemplateColumns: "220px 90px 90px 90px 1fr 90px 90px",
-                          gap: 8,
-                          alignItems: "center",
-                        }}
+                  return (
+                    <div key={r.tempId} className="tsGridRow">
+                      <select
+                        value={r.project_id}
+                        disabled={locked || (isContractor && projects.length === 0)}
+                        onChange={(e) => updateRow(r.tempId, { project_id: e.target.value })}
                       >
-                        <select
-                          value={r.project_id}
-                          disabled={locked || (isContractor && projects.length === 0)}
-                          onChange={(e) => updateRow(r.tempId, { project_id: e.target.value })}
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                        >
-                          <option value="">Select…</option>
-                          {projects.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              {p.name}
-                            </option>
-                          ))}
-                        </select>
+                        <option value="">Select…</option>
+                        {projects.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name}
+                          </option>
+                        ))}
+                      </select>
 
-                        <input
-                          value={r.time_in}
-                          disabled={locked}
-                          onChange={(e) => updateRow(r.tempId, { time_in: e.target.value })}
-                          placeholder="HH:MM"
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                        />
+                      <input
+                        type="time"
+                        step={60}
+                        value={r.time_in}
+                        disabled={locked}
+                        onChange={(e) => updateRow(r.tempId, { time_in: e.target.value })}
+                      />
 
-                        <input
-                          value={r.time_out}
-                          disabled={locked}
-                          onChange={(e) => updateRow(r.tempId, { time_out: e.target.value })}
-                          placeholder="HH:MM"
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                        />
+                      <input
+                        type="time"
+                        step={60}
+                        value={r.time_out}
+                        disabled={locked}
+                        onChange={(e) => updateRow(r.tempId, { time_out: e.target.value })}
+                      />
 
-                        <input
-                          value={r.lunch_hours}
-                          disabled={locked}
-                          onChange={(e) => updateRow(r.tempId, { lunch_hours: Number(e.target.value) })}
-                          type="number"
-                          min="0"
-                          step="0.25"
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                        />
+                      <input
+                        value={r.lunch_hours}
+                        disabled={locked}
+                        onChange={(e) => updateRow(r.tempId, { lunch_hours: Number(e.target.value) })}
+                        type="number"
+                        min="0"
+                        step="0.25"
+                      />
 
-                        <input
-                          value={r.notes}
-                          disabled={locked}
-                          onChange={(e) => updateRow(r.tempId, { notes: e.target.value })}
-                          placeholder="What did you work on?"
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                        />
+                      <input
+                        value={r.notes}
+                        disabled={locked}
+                        onChange={(e) => updateRow(r.tempId, { notes: e.target.value })}
+                        placeholder="What did you work on?"
+                      />
 
-                        <input
-                          value={r.mileage}
-                          disabled={locked}
-                          onChange={(e) => updateRow(r.tempId, { mileage: Number(e.target.value) })}
-                          type="number"
-                          min="0"
-                          step="0.1"
-                          style={{ padding: 10, borderRadius: 10, border: "1px solid #ddd" }}
-                        />
+                      <input
+                        value={r.mileage}
+                        disabled={locked}
+                        onChange={(e) => updateRow(r.tempId, { mileage: Number(e.target.value) })}
+                        type="number"
+                        min="0"
+                        step="0.1"
+                      />
 
-                        <div style={{ display: "flex", gap: 8, alignItems: "center", justifyContent: "space-between" }}>
-                          <span style={{ opacity: 0.8 }}>{r.status ?? "draft"}</span>
-                          {!locked ? (
-                            <button onClick={() => removeLine(r.tempId)} style={{ padding: "6px 10px" }}>
-                              ✕
-                            </button>
-                          ) : null}
-                        </div>
+                      <div className="tsStatusCell">
+                        <StatusPill status={(r.status ?? "draft") as EntryStatus} />
+                        {!locked ? (
+                          <button className="btnDanger tsRemoveBtn" onClick={() => removeLine(r.tempId)} title="Remove line">
+                            ✕
+                          </button>
+                        ) : null}
                       </div>
-                    );
-                  })}
+                    </div>
+                  );
+                })}
 
-                  <div style={{ marginTop: 10 }}>
-                    <button
-                      onClick={() => addLine(dayISO)}
-                      disabled={isContractor && projects.length === 0}
-                      title={isContractor && projects.length === 0 ? "Admin must assign a project first" : "Add a new line"}
-                    >
-                      + Add line
-                    </button>
-                  </div>
+                <div style={{ marginTop: 10 }}>
+                  <button
+                    onClick={() => addLine(dayISO)}
+                    disabled={isContractor && projects.length === 0}
+                    title={isContractor && projects.length === 0 ? "Admin must assign a project first" : "Add a new line"}
+                  >
+                    + Add line
+                  </button>
                 </div>
               </section>
             );
           })}
         </div>
       )}
-    </main>
+    </AppShell>
   );
 }
 

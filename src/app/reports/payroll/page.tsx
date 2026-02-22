@@ -27,6 +27,7 @@ type VTimeEntryAny = {
 };
 
 type ProjectRow = { id: string; name: string; week_start?: WeekStart | null };
+type ContractorRow = { id: string; full_name: string | null };
 
 function money(x: number) {
   return x.toFixed(2);
@@ -78,7 +79,9 @@ function PayrollInner() {
   const [rows, setRows] = useState<VTimeEntryAny[]>([]);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
-  const [contractors, setContractors] = useState<Array<{ id: string; full_name: string | null }>>([]);
+
+  const [contractors, setContractors] = useState<ContractorRow[]>([]);
+  const [loadingLookups, setLoadingLookups] = useState(false);
 
   const [exportCurrentTableOnly, setExportCurrentTableOnly] = useState(false);
   const [currentTable, setCurrentTable] = useState<"contractors" | "projects">("contractors");
@@ -87,33 +90,92 @@ function PayrollInner() {
   const isAdmin = role === "admin";
   const isManager = role === "manager";
   const isContractor = role === "contractor";
+  const isManagerOrAdmin = isAdmin || isManager;
 
   useEffect(() => {
     if (profLoading) return;
     if (!userId) router.replace("/login");
   }, [profLoading, userId, router]);
 
-  // Load projects incl week_start
+  // Load projects + contractors (scoped)
   useEffect(() => {
-    if (!profile) return;
+    if (!profile || !userId) return;
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase.from("projects").select("id,name,week_start").order("name", { ascending: true });
+      setLoadingLookups(true);
+      setMsg("");
 
-      if (cancelled) return;
-      if (error) {
-        setMsg(error.message);
-        setProjects([]);
-        return;
+      try {
+        // Projects (org-scoped)
+        const { data: proj, error: projErr } = await supabase
+          .from("projects")
+          .select("id,name,week_start")
+          .eq("org_id", profile.org_id)
+          .order("name", { ascending: true });
+
+        if (cancelled) return;
+        if (projErr) {
+          setProjects([]);
+          setMsg(projErr.message);
+        } else {
+          setProjects(((proj as any) ?? []) as ProjectRow[]);
+        }
+
+        // Contractors dropdown:
+        // - Admin: all active contractors in org
+        // - Manager: direct reports (contractors only)
+        // - Contractor: none (self)
+        if (!isManagerOrAdmin) {
+          setContractors([]);
+          setContractorId("");
+          setLoadingLookups(false);
+          return;
+        }
+
+        let q = supabase
+          .from("profiles")
+          .select("id, full_name")
+          .eq("org_id", profile.org_id)
+          .eq("is_active", true)
+          .eq("role", "contractor")
+          .order("full_name", { ascending: true });
+
+        if (isManager && !isAdmin) {
+          q = q.eq("manager_id", userId);
+        }
+
+        const { data: ppl, error: pplErr } = await q;
+
+        if (cancelled) return;
+        if (pplErr) {
+          setContractors([]);
+          setMsg((m) => (m ? `${m}\n${pplErr.message}` : pplErr.message));
+        } else {
+          const list = (((ppl as any) ?? []) as ContractorRow[]) || [];
+          setContractors(list);
+
+          // If current contractorId is not allowed anymore, clear it
+          if (contractorId && !list.some((c) => c.id === contractorId)) {
+            setContractorId("");
+          }
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setMsg(e?.message || "Failed to load lookups.");
+          setProjects([]);
+          setContractors([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingLookups(false);
       }
-      setProjects(((data as any) ?? []) as ProjectRow[]);
     })();
 
     return () => {
       cancelled = true;
     };
-  }, [profile]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile?.org_id, userId, isAdmin, isManager]);
 
   // Update effective week start based on selected project
   useEffect(() => {
@@ -134,39 +196,24 @@ function PayrollInner() {
     setEndDate(r.end);
   }, [preset, weekStart]);
 
-  // Contractors dropdown for admin/manager (RLS scopes managers to direct reports)
-  useEffect(() => {
-    if (!profile) return;
-    if (!(isAdmin || isManager)) {
-      setContractors([]);
+  async function load() {
+    if (!profile || !userId) return;
+
+    // Manager with no direct reports: show a helpful message (avoid “why is it blank?”)
+    if (isManager && !isAdmin && contractors.length === 0) {
+      setRows([]);
+      setMsg("No contractors assigned to you yet. Ask Admin to set manager_id on contractor profiles.");
       return;
     }
 
-    let cancelled = false;
-    (async () => {
-      const { data } = await supabase
-        .from("profiles")
-        .select("id, full_name")
-        .eq("is_active", true)
-        .order("full_name", { ascending: true });
-
-      if (cancelled) return;
-      setContractors(((data as any) ?? []) as Array<{ id: string; full_name: string | null }>);
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [profile, isAdmin, isManager]);
-
-  async function load() {
-    if (!profile) return;
     setBusy(true);
     setMsg("");
+
     try {
       let q = supabase
         .from("v_time_entries")
         .select("*")
+        .eq("org_id", profile.org_id)
         .gte("entry_date", startDate)
         .lte("entry_date", endDate)
         .eq("status", status)
@@ -174,14 +221,30 @@ function PayrollInner() {
         .order("entry_date", { ascending: true });
 
       if (projectId) q = q.eq("project_id", projectId);
-      if (!isContractor && contractorId) q = q.eq("user_id", contractorId);
+
+      // ✅ Scoping:
+      // Contractor always sees self
+      if (isContractor) {
+        q = q.eq("user_id", userId);
+      } else {
+        // Admin can filter any contractor; Manager can filter only direct reports
+        if (contractorId) {
+          const allowed = isAdmin ? true : contractors.some((c) => c.id === contractorId);
+          if (allowed) q = q.eq("user_id", contractorId);
+        } else if (isManager && !isAdmin) {
+          // Manager without a specific filter: limit to direct reports
+          q = q.in("user_id", contractors.map((c) => c.id));
+        }
+      }
 
       const { data, error } = await q;
+
       if (error) {
         setRows([]);
         setMsg(error.message);
         return;
       }
+
       setRows(((data as any) ?? []) as VTimeEntryAny[]);
     } finally {
       setBusy(false);
@@ -202,14 +265,7 @@ function PayrollInner() {
 
       const existing = map.get(uid);
       if (!existing) {
-        map.set(uid, {
-          user_id: uid,
-          full_name: getNameFromRow(r),
-          total_hours: hours,
-          first_rate: rate,
-          rate_is_mixed: false,
-          total_pay: pay,
-        });
+        map.set(uid, { user_id: uid, full_name: getNameFromRow(r), total_hours: hours, first_rate: rate, rate_is_mixed: false, total_pay: pay });
       } else {
         existing.total_hours += hours;
         existing.total_pay += pay;
@@ -239,22 +295,14 @@ function PayrollInner() {
   }, [rows]);
 
   const totalsByUser = useMemo(() => {
-    let hours = 0,
-      pay = 0;
-    for (const r of summaryByUser) {
-      hours += r.total_hours;
-      pay += r.total_pay;
-    }
+    let hours = 0, pay = 0;
+    for (const r of summaryByUser) { hours += r.total_hours; pay += r.total_pay; }
     return { hours, pay };
   }, [summaryByUser]);
 
   const totalsByProject = useMemo(() => {
-    let hours = 0,
-      pay = 0;
-    for (const r of summaryByProject) {
-      hours += r.total_hours;
-      pay += r.total_pay;
-    }
+    let hours = 0, pay = 0;
+    for (const r of summaryByProject) { hours += r.total_hours; pay += r.total_pay; }
     return { hours, pay };
   }, [summaryByProject]);
 
@@ -266,8 +314,9 @@ function PayrollInner() {
 
   function exportSummaryCsv() {
     const projName = projectId ? projects.find((p) => p.id === projectId)?.name : "All";
+
     const contractorName = isContractor
-      ? "(self)"
+      ? "(you)"
       : contractorId
         ? contractors.find((c) => c.id === contractorId)?.full_name || contractorId
         : "All";
@@ -278,29 +327,9 @@ function PayrollInner() {
         const lines: string[] = [header.map(csvEscape).join(",")];
 
         for (const r of summaryByUser) {
-          lines.push(
-            [
-              preset,
-              weekStart,
-              startDate,
-              endDate,
-              status,
-              projName,
-              contractorName,
-              r.full_name,
-              r.total_hours.toFixed(2),
-              r.rate_is_mixed ? "mixed" : money(r.first_rate),
-              money(r.total_pay),
-            ]
-              .map(csvEscape)
-              .join(",")
-          );
+          lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)].map(csvEscape).join(","));
         }
-        lines.push(
-          [preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)]
-            .map(csvEscape)
-            .join(",")
-        );
+        lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)].map(csvEscape).join(","));
         return downloadCsv(`payroll_contractors_${startDate}_to_${endDate}.csv`, lines.join("\n"));
       }
 
@@ -310,25 +339,16 @@ function PayrollInner() {
       for (const r of summaryByProject) {
         lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, r.project_name, r.total_hours.toFixed(2), money(r.total_pay)].map(csvEscape).join(","));
       }
-      lines.push(
-        [preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByProject.hours.toFixed(2), money(totalsByProject.pay)]
-          .map(csvEscape)
-          .join(",")
-      );
+      lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByProject.hours.toFixed(2), money(totalsByProject.pay)].map(csvEscape).join(","));
       return downloadCsv(`payroll_projects_${startDate}_to_${endDate}.csv`, lines.join("\n"));
     }
 
-    // both tables
     const header = ["Report", "Preset", "WeekStart", "Start", "End", "Status", "Project", "Contractor", "", "Section", "Name", "Hours", "Rate", "Pay"];
     const baseMeta = ["Payroll Summary", preset, weekStart, startDate, endDate, status, projName || "All", contractorName || "All", ""];
     const lines: string[] = [header.map(csvEscape).join(",")];
 
     for (const r of summaryByUser) {
-      lines.push(
-        [...baseMeta, "By Contractor", r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)]
-          .map(csvEscape)
-          .join(",")
-      );
+      lines.push([...baseMeta, "By Contractor", r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)].map(csvEscape).join(","));
     }
     lines.push([...baseMeta, "By Contractor", "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)].map(csvEscape).join(","));
 
@@ -356,31 +376,18 @@ function PayrollInner() {
   const headerRight = (
     <div className="payHeaderRight">
       <label className="payCsvToggle muted">
-        <input
-          type="checkbox"
-          checked={exportCurrentTableOnly}
-          onChange={(e) => setExportCurrentTableOnly(e.target.checked)}
-          disabled={rows.length === 0 || busy}
-        />
+        <input type="checkbox" checked={exportCurrentTableOnly} onChange={(e) => setExportCurrentTableOnly(e.target.checked)} disabled={rows.length === 0 || busy} />
         Download current table only
       </label>
 
-      <select
-        value={currentTable}
-        onChange={(e) => setCurrentTable(e.target.value as any)}
-        disabled={!exportCurrentTableOnly || rows.length === 0 || busy}
-      >
+      <select value={currentTable} onChange={(e) => setCurrentTable(e.target.value as any)} disabled={!exportCurrentTableOnly || rows.length === 0 || busy}>
         <option value="contractors">Summary by Contractor</option>
         <option value="projects">Summary by Project</option>
       </select>
 
-      <button className="pill" onClick={exportSummaryCsv} disabled={rows.length === 0 || busy}>
-        Export Summary CSV
-      </button>
-      <button className="pill" onClick={exportDetailCsv} disabled={rows.length === 0 || busy}>
-        Export Detail CSV
-      </button>
-      <button className="btnPrimary" onClick={load} disabled={busy}>
+      <button className="pill" onClick={exportSummaryCsv} disabled={rows.length === 0 || busy}>Export Summary CSV</button>
+      <button className="pill" onClick={exportDetailCsv} disabled={rows.length === 0 || busy}>Export Detail CSV</button>
+      <button className="btnPrimary" onClick={load} disabled={busy || loadingLookups}>
         {busy ? "Loading…" : "Run Report"}
       </button>
     </div>
@@ -389,12 +396,11 @@ function PayrollInner() {
   if (profLoading) {
     return (
       <AppShell title="Payroll" subtitle="Loading profile…">
-        <div className="card cardPad">
-          <div className="muted">Loading…</div>
-        </div>
+        <div className="card cardPad"><div className="muted">Loading…</div></div>
       </AppShell>
     );
   }
+
   if (!userId) return null;
 
   if (!profile) {
@@ -427,26 +433,12 @@ function PayrollInner() {
 
           <div className="payField">
             <div className="payLabel">Start</div>
-            <input
-              type="date"
-              value={startDate}
-              onChange={(e) => {
-                setPreset("custom");
-                setStartDate(e.target.value);
-              }}
-            />
+            <input type="date" value={startDate} onChange={(e) => { setPreset("custom"); setStartDate(e.target.value); }} />
           </div>
 
           <div className="payField">
             <div className="payLabel">End</div>
-            <input
-              type="date"
-              value={endDate}
-              onChange={(e) => {
-                setPreset("custom");
-                setEndDate(e.target.value);
-              }}
-            />
+            <input type="date" value={endDate} onChange={(e) => { setPreset("custom"); setEndDate(e.target.value); }} />
           </div>
 
           <div className="payField">
@@ -464,23 +456,18 @@ function PayrollInner() {
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               <option value="">All</option>
               {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
+                <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
           </div>
 
           <div className="payField">
             <div className="payLabel">Contractor</div>
-            <select value={contractorId} onChange={(e) => setContractorId(e.target.value)} disabled={isContractor}>
+            <select value={contractorId} onChange={(e) => setContractorId(e.target.value)} disabled={isContractor || !isManagerOrAdmin}>
               <option value="">{isContractor ? "(you)" : "All"}</option>
-              {!isContractor &&
-                contractors.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.full_name || c.id}
-                  </option>
-                ))}
+              {!isContractor && contractors.map((c) => (
+                <option key={c.id} value={c.id}>{c.full_name || c.id}</option>
+              ))}
             </select>
           </div>
         </div>
@@ -510,9 +497,7 @@ function PayrollInner() {
       <div className="card cardPad paySection">
         <div className="paySectionHeader">
           <div className="paySectionTitle">Summary by Contractor</div>
-          <button className="pill" onClick={() => setCurrentTable("contractors")} title="Use for CSV export">
-            Set current
-          </button>
+          <button className="pill" onClick={() => setCurrentTable("contractors")} title="Use for CSV export">Set current</button>
         </div>
 
         {summaryByUser.length === 0 ? (
@@ -548,9 +533,7 @@ function PayrollInner() {
       <div className="card cardPad paySection">
         <div className="paySectionHeader">
           <div className="paySectionTitle">Summary by Project</div>
-          <button className="pill" onClick={() => setCurrentTable("projects")} title="Use for CSV export">
-            Set current
-          </button>
+          <button className="pill" onClick={() => setCurrentTable("projects")} title="Use for CSV export">Set current</button>
         </div>
 
         {summaryByProject.length === 0 ? (

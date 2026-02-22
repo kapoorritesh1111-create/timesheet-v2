@@ -1,265 +1,191 @@
 # Timesheet
 
-# Timesheet SaaS — Baseline v1.2 (DB-first, Next.js 14 + Supabase)
+# Timesheet SaaS — Current Baseline (Next.js 14 + Supabase, DB-first)
 
-This document captures the **current baseline** (code + database) so we can safely continue work in a new chat without losing context.
-
----
-
-## 1) Product summary
-
-A multi-tenant timesheet + payroll web app with strict org/project scoping.
-
-### Core features currently implemented
-- **Auth**: Supabase Auth (email invite flow, login, reset).
-- **Onboarding gate**: users must complete profile before using the app.
-- **Roles**:
-  - **admin**: full org visibility; can create projects; manage users; manage project access; update hourly rates; approve all.
-  - **manager**: can view/approve **direct reports only** (strict team scope).
-  - **contractor**: can create/edit own time entries; can only see projects they are assigned to.
-- **Projects**:
-  - Admin can create projects (UI).
-  - Admin can activate/deactivate projects.
-  - Project membership enforced for timesheet access + time entry insertion.
-  - Project creation supports `week_start` (Sunday default; per-project option exists in DB).
-- **Timesheet**:
-  - Strict project membership enforced (contractors can only log time against assigned projects).
-- **Payroll report**:
-  - Uses `hourly_rate_snapshot` on time entries for audit-safe calculation (approved hours × snapshot rate).
-- **Invite API**:
-  - Admin-only endpoint that invites a user and optionally assigns them to `project_ids`.
+This README is the **working baseline** for the repo + DB so we can keep iterating without losing context.
 
 ---
 
-## 2) Tech stack
+## 1) What this app is
 
-- **Frontend**: Next.js 14 (App Router), TypeScript
-- **Backend**: Supabase (Postgres + RLS + Auth)
-- **Hosting**: Vercel
-- **DB-first** approach: permissions are enforced in RLS (UI should mirror DB rules)
+A multi-tenant timesheet + approvals + payroll reporting app with strict org scoping.
+
+### Roles
+- **admin**
+  - Full org visibility
+  - Invite users (manager/contractor), assign contractor → manager
+  - Create projects + activate/deactivate
+  - Manage project access (People → Project access mode)
+  - Approve anyone
+- **manager**
+  - Scope = **direct reports only**
+  - Can view submitted entries for direct reports and approve/reject
+  - Should be able to open **People** (profiles) page but only see assigned reports
+- **contractor**
+  - Scope = self only
+  - Can submit timesheets only for assigned projects
 
 ---
 
-## 3) Repo structure (high level)
+## 2) Pages that are in a “good” state now
 
-```
+### ✅ Login / Reset / Onboarding
+- Auth works via Supabase Auth
+- Onboarding gate enforced (RequireOnboarding + `isProfileComplete()` checks)
+
+### ✅ Dashboard (`/dashboard`)
+- Clean landing after login/onboarding
+- Shows basic account overview (role, active flag, onboarding status, hourly rate for contractors)
+
+### ✅ Projects (`/projects`)
+- Admin:
+  - Create project (includes `week_start`)
+  - Activate/deactivate
+  - Assign projects to a user via `/projects?user=<id>`
+- Manager/Contractor:
+  - Sees only allowed projects (via RLS + membership)
+- Drawer UX:
+  - Click project row opens details drawer
+  - Shows project settings + a read-only member list (member management can be expanded next)
+
+### ✅ Approvals (`/approvals`)
+- Manager/Admin only
+- Loads submitted entries for the selected week (week navigation included)
+- Approve = sets week’s submitted rows → approved
+- Reject = sets week’s submitted rows → rejected (sent back editable)
+
+### ✅ Payroll report (`/reports/payroll`)
+- Uses `v_time_entries.hours_worked` + `time_entries.hourly_rate_snapshot`
+- Filters:
+  - Date preset (week/month/custom)
+  - Status
+  - Project
+  - Contractor (admin/manager; contractor is locked to self)
+- Outputs:
+  - Summary by Contractor
+  - Summary by Project
+  - CSV export (summary or detail)
+  - KPI cards (Total Hours, Total Pay, Avg Rate)
+
+### ✅ Admin Invite (`/admin`)
+- Admin-only tools page (uses AppShell + RequireOnboarding)
+- Invite user via `/api/admin/invite`
+- Supports:
+  - Invite manager
+  - Invite contractor with:
+    - hourly rate
+    - required manager assignment
+
+### ✅ People / Profiles (`/profiles`)
+- Table-based “directory + edit” page
+- Visibility intent:
+  - Admin: all org users
+  - Manager: self + direct reports
+  - Contractor: self only
+- Admin controls:
+  - Change role (except cannot demote admin if you enforce that)
+  - Assign manager to contractors
+  - Activate/inactivate users
+  - Edit hourly rates (admin can edit anyone; manager can edit direct reports)
+
+> NOTE: This page is currently the **most visually inconsistent** (still uses old layout/buttons vs AppShell + theme).
+
+---
+
+## 3) Database baseline (critical)
+
+### Core tables (RLS enabled)
+- `orgs`
+- `profiles`
+- `projects`
+- `project_members`
+- `time_entries`
+
+### View: `v_time_entries`
+This is the primary read model for approvals + payroll.
+It must include **computed hours**:
+
+- `hours_worked` is computed in SQL (recommended formula):
+  - `hours = (time_out - time_in) - lunch_hours`
+  - safely handles NULLs
+  - clamps negatives to 0 (recommended)
+
+This view should also expose:
+- `org_id`, `user_id`, `project_id`, `entry_date`, `status`, `notes`
+- `hourly_rate_snapshot`
+- optional: `full_name`, `project_name` for nicer UI
+
+---
+
+## 4) Repo structure
 src/
-  app/
-    admin/            # admin screens (invite, etc.)
-    api/
-      admin/invite/   # server route: POST /api/admin/invite
-    approvals/        # approval workflow UI
-    dashboard/        # KPI / landing dashboard
-    login/            # login page
-    onboarding/       # onboarding UI (complete profile)
-    profiles/         # user directory + hourly rates/admin tools
-    projects/         # projects list + assignment UI
-    reports/          # payroll + reporting
-    reset/            # password reset UI
-    settings/         # settings
-    timesheet/        # timesheet UI
-  components/
-    auth/             # RequireOnboarding, gates
-    layout/           # AppShell layout
-    theme/            # theme prefs (ui_prefs) work-in-progress
-  lib/
-    date.ts
-    dateRanges.ts
-    profileCompletion.ts
-    supabaseBrowser.ts
-    supabaseServer.ts
-    useProfile.ts
-```
+app/
+admin/
+approvals/
+dashboard/
+profiles/
+projects/
+reports/payroll/
+timesheet/
+api/admin/invite/
+components/
+auth/
+layout/ # AppShell, TopNav
+lib/
+useProfile.ts
+supabaseBrowser.ts
+dateRanges.ts
+date.ts
+
 
 ---
 
-## 4) Environment variables (Vercel)
+## 5) Environment variables
 
 Required:
-- `NEXT_PUBLIC_SUPABASE_URL`
-- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-- `SUPABASE_SERVICE_ROLE_KEY`  *(server-side only; used by /api/admin/invite)*
-- `NEXT_PUBLIC_SITE_URL` *(used for invite redirect: /auth/callback)*
-
-Notes:
-- `src/lib/supabaseServer.ts` uses the Service Role key; **never import into client components**.
+- NEXT_PUBLIC_SUPABASE_URL
+- NEXT_PUBLIC_SUPABASE_ANON_KEY
+- SUPABASE_SERVICE_ROLE_KEY   (server-only; API routes)
+- NEXT_PUBLIC_SITE_URL        (invite redirect base)
 
 ---
 
-## 5) Invite flow + project assignment logic
+## 6) Where we stand right now (status)
 
-### API
-**POST** `/api/admin/invite`  
-File: `src/app/api/admin/invite/route.ts`
+### Solid + working
+- End-to-end user flow: login → onboarding → dashboard → timesheet → submit → approvals → payroll reporting
+- Org scoping is DB-first (RLS is the source of truth)
+- Payroll + approvals use the view (`v_time_entries`) for consistent calculations
 
-Request body:
-```json
-{
-  "email": "user@example.com",
-  "full_name": "Name",
-  "hourly_rate": 50,
-  "role": "manager|contractor",
-  "manager_id": "uuid-or-null",
-  "project_ids": ["uuid1","uuid2"]
-}
-```
+### Known gaps / improvements
+1) **TopNav**
+   - Manager should see **People** in nav (currently only Admin sees Profiles)
+   - Link should still go to `/profiles` but label it “People”
+   - `/profiles` page + RLS already ensures managers only see assigned users
 
-Behavior:
-1. Validates Bearer token (Supabase user session token).
-2. Checks caller is **admin** via `profiles`.
-3. Calls `supabase.auth.admin.inviteUserByEmail(email, { redirectTo })`.
-4. Upserts invited user into `public.profiles`.
-5. If `project_ids` provided:
-   - Validates projects belong to caller’s org.
-   - Upserts rows into `public.project_members` (onConflict currently `project_id,user_id` in code; DB uniqueness baseline is org_id+project_id+profile_id).
+2) **UI consistency / theme**
+   - `/profiles` page still uses older styles and doesn’t use AppShell
+   - Should be upgraded to match the newer “card/cardPad/pill/btnPrimary” system
+
+3) **Admin**
+   - Optional: add “Invite history” and “Org settings”
+   - Optional: improve validation + error surfacing to match other pages
 
 ---
 
-## 6) Database schema (current baseline)
+## 7) Recommended next change (confirmed)
 
-### Tables (RLS enabled)
-| table | notes |
-|---|---|
-| `orgs` | tenant container |
-| `profiles` | one row per auth user; role, org_id, onboarding flag, ui_prefs |
-| `projects` | org-scoped projects; includes `week_start` |
-| `project_members` | membership between profiles/users and projects |
-| `time_entries` | timesheet entries; includes `hourly_rate_snapshot` |
+### Next step #1 (small + high value): Nav + People for managers
+- Update `TopNav` so managers see “People”
+- Keep permissions enforced by RLS + the profiles page filtering
+- This improves the “login onward” polish immediately
 
-### Columns (as reported)
-**profiles**
-- `id (uuid)` PK (matches auth.uid)
-- `org_id (uuid)`
-- `full_name (text)`
-- `role (text)` — `admin | manager | contractor`
-- `hourly_rate (numeric)`
-- `manager_id (uuid)` — direct report mapping for manager scope
-- `is_active (bool)`
-- `phone, address, avatar_url`
-- `onboarding_completed_at (timestamptz)`
-- `ui_prefs (jsonb)` — theme/UI preferences (present in DB)
+### Next step #2 (bigger but important): Rebuild `/profiles` with AppShell + theme
+- Convert `/profiles/page.tsx` to:
+  - Use `AppShell`
+  - Use the same components/classes as Projects/Payroll/Approvals
+  - Keep the exact same permissions logic, just improve UX and consistency
 
-**projects**
-- `id (uuid)` PK
-- `org_id (uuid)`
-- `name (text)`
-- `is_active (bool)`
-- `parent_id (uuid)` (optional hierarchy)
-- `week_start (text)` (Sunday default; project-level)
-
-**project_members**
-- `id (uuid)` PK
-- `org_id (uuid)`
-- `project_id (uuid)`
-- `profile_id (uuid)`
-- `user_id (uuid)` *(legacy/compat column; currently populated same as profile_id)*
-- `is_active (bool)`
-- `created_at (timestamptz)`
-
-**time_entries**
-- `id (uuid)` PK
-- `org_id (uuid)`
-- `user_id (uuid)`
-- `project_id (uuid)`
-- `entry_date (date)`
-- `time_in (time)`, `time_out (time)`
-- `lunch_hours (numeric)`
-- `notes (text)`
-- `mileage (numeric)`
-- `status (text)` (draft/submitted/approved/rejected)
-- `approved_by (uuid)`, `approved_at (timestamptz)`
-- `hourly_rate_snapshot (numeric)` *(audit-safe payroll)*
-- `created_at`, `updated_at`
+(After that: Admin polish + org settings + theme preferences.)
 
 ---
-
-## 7) RLS status
-
-All core tables have RLS enabled and **NOT forced**:
-- orgs: enabled ✅ / forced ❌
-- profiles: enabled ✅ / forced ❌
-- projects: enabled ✅ / forced ❌
-- project_members: enabled ✅ / forced ❌
-- time_entries: enabled ✅ / forced ❌
-
----
-
-## 8) Key helper functions (public schema)
-
-These exist and are SECURITY DEFINER (used by policies):
-- `current_org_id() returns uuid`
-- `current_user_role() returns text`
-- `is_admin() returns boolean`
-
-Important:
-- Avoid policies that `SELECT` from `profiles` directly inside a `profiles` policy (can cause recursion).
-- Current baseline uses helper functions to prevent recursion.
-
----
-
-## 9) Current RLS policies (as-of snapshot)
-
-### orgs
-- `orgs_select_own` — select where `id = current_org_id()`
-
-### profiles
-- `profiles_select_own` — user can select self
-- `profiles_select_safe` — (id=self) OR (admin & same org)
-- `profiles_select_manager_reports` — manager can select direct reports (needs review: current qual includes manager_id = auth.uid())
-- Updates:
-  - `profiles_update_own`
-  - `profiles_update_admin_org`
-  - `profiles_update_manager_team` (admin/manager scope)
-
-### projects
-- `projects_select_org` — admin/manager sees org; contractor sees only member projects via `project_members`
-- write policies for admin/manager insert/update; admin delete
-
-### project_members
-- `pm_select` — admin sees org; user sees own membership
-- `pm_insert` / `pm_update` — admin only
-- legacy policies also exist: `pm_admin_manager_write` / `pm_admin_manager_delete` (needs cleanup later to avoid surprises)
-
-### time_entries
-- `te_insert_own` — only own entries, must be member of project (or admin/manager)
-- `te_select` — own OR admin OR manager (direct reports)
-- `te_manager_approve` — admin approves all; manager approves direct reports
-- `te_update_own_draft_rejected` — user can edit own entries in draft/rejected (and must still be project member)
-
----
-
-## 10) Known issues / cleanup candidates (do not change in v1.2 baseline)
-
-- **Policy duplication**: `project_members` has both `pm_*` and `pm_admin_manager_*` policies — permissive policies can broaden access unintentionally. Later step: consolidate to one clear set.
-- **Type mismatch in code vs DB**: `profiles.ui_prefs (jsonb)` exists in DB, but TypeScript `Profile` in `useProfile.ts` does not include `ui_prefs` yet.
-- **Invite upsert conflict keys**: invite route upserts `project_members` with `onConflict: "project_id,user_id"`, while DB baseline uniqueness is ideally `(org_id, project_id, profile_id)`. Keep as-is in v1.2; align later.
-
----
-
-## 11) What “strict team scope” means (current target)
-
-- Manager can **only** see/approve time entries for **direct reports** (`profiles.manager_id = manager auth.uid()`).
-- Admin can see/update/approve **all** users in org.
-
-This should be enforced in **RLS first**, and then mirrored in UI.
-
----
-
-## 12) Roadmap (next SaaS steps after v1.2 baseline)
-
-Recommended order:
-1. **Stabilize/Consolidate RLS** (remove duplicates; prove manager scope with test users)
-2. **Projects drawer member management** (UI feature) — after RLS is clean
-3. **Reporting presets**: Current week / Last week / Current month / Last month + Custom
-4. **CSV export**: “current table only” toggle + totals row
-5. **Audit log** (enterprise trust)
-6. **Notifications** (email + in-app)
-7. **Billing & subscriptions** (Stripe) + org limits
-
----
-
-## 13) Baseline tag
-
-**Baseline label**: `v1.2`  
-**Policy snapshot date**: captured in this README.  
-When starting a new chat, paste this file first to preserve state.

@@ -1,3 +1,4 @@
+// src/app/projects/page.tsx
 "use client";
 
 import { Suspense } from "react";
@@ -8,11 +9,11 @@ import ProjectsClient from "./projects-client";
 function ProjectsLoading() {
   return (
     <AppShell title="Projects" subtitle="Create projects and manage access">
-      <div className="card cardPad" style={{ maxWidth: 980 }}>
-        <div style={{ display: "grid", gap: 10 }}>
-          <div className="skeleton" style={{ height: 16, width: 260 }} />
-          <div className="skeleton" style={{ height: 40, width: "100%" }} />
-          <div className="skeleton" style={{ height: 320, width: "100%" }} />
+      <div className="card cardPad prShell">
+        <div className="prSkel">
+          <div className="skeleton prSkelLine" />
+          <div className="skeleton prSkelBar" />
+          <div className="skeleton prSkelTable" />
         </div>
       </div>
     </AppShell>

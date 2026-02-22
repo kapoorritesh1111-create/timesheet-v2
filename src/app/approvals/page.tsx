@@ -17,9 +17,10 @@ type EntryRow = {
   project_id: string;
   notes: string | null;
   status: EntryStatus;
+
   hours_worked: number | null; // from v_time_entries
-  full_name?: string | null; // from v_time_entries (optional)
-  project_name?: string | null; // from v_time_entries (optional)
+  full_name?: string | null; // optional from v_time_entries
+  project_name?: string | null; // optional from v_time_entries
 };
 
 type ProfileRow = { id: string; full_name: string | null; role: string | null; manager_id?: string | null };
@@ -46,8 +47,22 @@ function StatusPill({ status }: { status: EntryStatus }) {
   return <span className={cls}>{status}</span>;
 }
 
+function ApprovalsLoading() {
+  return (
+    <AppShell title="Approvals" subtitle="Submitted timesheets">
+      <div className="card cardPad" style={{ maxWidth: 1100 }}>
+        <div style={{ display: "grid", gap: 10 }}>
+          <div className="skeleton" style={{ height: 16, width: 220 }} />
+          <div className="skeleton" style={{ height: 44, width: "100%" }} />
+          <div className="skeleton" style={{ height: 280, width: "100%" }} />
+        </div>
+      </div>
+    </AppShell>
+  );
+}
+
 function ApprovalsInner() {
-  const { loading: profLoading, profile, userId } = useProfile();
+  const { loading: profLoading, profile, userId, error: profErr } = useProfile();
 
   const isAdmin = profile?.role === "admin";
   const isManager = profile?.role === "manager";
@@ -57,6 +72,7 @@ function ApprovalsInner() {
   const weekStartISO = useMemo(() => toISODate(weekStart), [weekStart]);
   const weekEndISO = useMemo(() => toISODate(addDays(weekStart, 6)), [weekStart]);
 
+  const [loadingWeek, setLoadingWeek] = useState(false);
   const [entries, setEntries] = useState<EntryRow[]>([]);
   const [profiles, setProfiles] = useState<Record<string, ProfileRow>>({});
   const [projects, setProjects] = useState<Record<string, ProjectRow>>({});
@@ -69,14 +85,13 @@ function ApprovalsInner() {
     let cancelled = false;
 
     (async () => {
+      setLoadingWeek(true);
       setMsg("");
 
-      // Load supporting lookups (profiles/projects) so UI can show names.
-      // Keep these lightweight.
       try {
-        // Profiles:
+        // Profiles lookup:
         // - Admin: everyone in org
-        // - Manager: just direct reports (manager_id = auth.uid()) + self (optional)
+        // - Manager: direct reports only
         if (isAdmin) {
           const { data, error } = await supabase
             .from("profiles")
@@ -104,7 +119,7 @@ function ApprovalsInner() {
           }
         }
 
-        // Projects:
+        // Projects lookup (org scoped)
         const { data: proj, error: projErr } = await supabase
           .from("projects")
           .select("id, name")
@@ -116,41 +131,65 @@ function ApprovalsInner() {
           for (const p of (proj ?? []) as any[]) pmap[p.id] = p;
           setProjects(pmap);
         }
-      } catch (e: any) {
-        if (!cancelled) setMsg(e?.message || "Failed to load lookups.");
-      }
 
-      // Entries (submitted only) for the selected week.
-      // View includes hours_worked and optional full_name/project_name (if present in your view definition).
-      const { data: ent, error: entErr } = await supabase
-        .from("v_time_entries")
-        .select("id, user_id, entry_date, project_id, notes, status, hours_worked, full_name, project_name")
-        .eq("org_id", profile.org_id)
-        .eq("status", "submitted")
-        .gte("entry_date", weekStartISO)
-        .lte("entry_date", weekEndISO)
-        .order("user_id", { ascending: true })
-        .order("entry_date", { ascending: true });
+        // Build allowed user list for managers (direct reports)
+        const allowedUserIds = !isAdmin ? Object.keys(profiles) : [];
 
-      if (!cancelled) {
-        if (entErr) {
-          setMsg((m) => (m ? `${m}\n${entErr.message}` : entErr.message));
-          setEntries([]);
-          return;
+        // Entries (submitted only)
+        let q = supabase
+          .from("v_time_entries")
+          .select("id, user_id, entry_date, project_id, notes, status, hours_worked, full_name, project_name")
+          .eq("org_id", profile.org_id)
+          .eq("status", "submitted")
+          .gte("entry_date", weekStartISO)
+          .lte("entry_date", weekEndISO)
+          .order("user_id", { ascending: true })
+          .order("entry_date", { ascending: true });
+
+        // ✅ Critical: manager scoping enforced at query time
+        if (!isAdmin) {
+          if (allowedUserIds.length === 0) {
+            // no direct reports
+            if (!cancelled) {
+              setEntries([]);
+              setLoadingWeek(false);
+            }
+            return;
+          }
+          q = q.in("user_id", allowedUserIds);
         }
-        setEntries(((ent as any) ?? []) as EntryRow[]);
+
+        const { data: ent, error: entErr } = await q;
+
+        if (!cancelled) {
+          if (entErr) {
+            setMsg((m) => (m ? `${m}\n${entErr.message}` : entErr.message));
+            setEntries([]);
+            setLoadingWeek(false);
+            return;
+          }
+          setEntries(((ent as any) ?? []) as EntryRow[]);
+          setLoadingWeek(false);
+        }
+      } catch (e: any) {
+        if (!cancelled) {
+          setMsg(e?.message || "Failed to load approvals.");
+          setEntries([]);
+          setLoadingWeek(false);
+        }
       }
     })();
 
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userId, profile, isAdmin, isManagerOrAdmin, weekStartISO, weekEndISO]);
 
   const groups: Group[] = useMemo(() => {
     const map = new Map<GroupKey, Group>();
     for (const e of entries) {
-      const ws = weekStartISO; // since we fetch only current week, this is stable
+      const ws = weekStartISO;
       const we = weekEndISO;
       const key = `${e.user_id}|${ws}`;
       if (!map.has(key)) {
@@ -162,7 +201,6 @@ function ApprovalsInner() {
   }, [entries, weekStartISO, weekEndISO]);
 
   function displayName(user_id: string, sample?: EntryRow) {
-    // Prefer view-provided full_name, else lookup map, else fall back.
     return sample?.full_name || profiles[user_id]?.full_name || user_id.slice(0, 8);
   }
 
@@ -171,8 +209,7 @@ function ApprovalsInner() {
   }
 
   function groupTotalHours(g: Group) {
-    const sum = g.entries.reduce((acc, e) => acc + Number(e.hours_worked ?? 0), 0);
-    return sum;
+    return g.entries.reduce((acc, e) => acc + Number(e.hours_worked ?? 0), 0);
   }
 
   async function approveGroup(g: Group) {
@@ -193,7 +230,6 @@ function ApprovalsInner() {
         return;
       }
 
-      // Remove from current list
       setEntries((prev) => prev.filter((x) => !(x.user_id === g.user_id && x.entry_date >= g.week_start && x.entry_date <= g.week_end)));
       setMsg("Approved ✅");
     } finally {
@@ -229,37 +265,38 @@ function ApprovalsInner() {
   const headerRight = (
     <div className="apHeaderRight">
       <div className="apWeekNav">
-        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, -7))} disabled={!!busyKey} title="Previous week">
+        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, -7))} disabled={!!busyKey || loadingWeek} title="Previous week">
           ← Prev
         </button>
-        <button className="pill" onClick={() => setWeekStart(startOfWeekSunday(new Date()))} disabled={!!busyKey} title="This week">
+        <button className="pill" onClick={() => setWeekStart(startOfWeekSunday(new Date()))} disabled={!!busyKey || loadingWeek} title="This week">
           This week
         </button>
-        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, 7))} disabled={!!busyKey} title="Next week">
+        <button className="pill" onClick={() => setWeekStart((d) => addDays(d, 7))} disabled={!!busyKey || loadingWeek} title="Next week">
           Next →
         </button>
       </div>
     </div>
   );
 
-  if (profLoading) {
+  if (profLoading) return <ApprovalsLoading />;
+
+  if (!userId) {
     return (
-      <AppShell title="Approvals" subtitle="Loading profile…">
-        <div className="card cardPad">
-          <div className="muted">Loading…</div>
+      <AppShell title="Approvals" subtitle="Please log in">
+        <div className="alert alertWarn">
+          <div style={{ fontWeight: 950 }}>Session required</div>
+          <div className="muted" style={{ marginTop: 6 }}>Please log in again.</div>
         </div>
       </AppShell>
     );
   }
 
-  if (!profile || !userId) {
+  if (!profile) {
     return (
-      <AppShell title="Approvals" subtitle="Please log in">
+      <AppShell title="Approvals" subtitle="Profile missing">
         <div className="alert alertWarn">
-          <div style={{ fontWeight: 950 }}>Session required</div>
-          <div className="muted" style={{ marginTop: 6 }}>
-            Please log in again.
-          </div>
+          <div style={{ fontWeight: 950 }}>Logged in, but profile could not be loaded</div>
+          <pre style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{profErr || "No details."}</pre>
         </div>
       </AppShell>
     );
@@ -270,9 +307,7 @@ function ApprovalsInner() {
       <AppShell title="Approvals" subtitle="Manager/Admin only">
         <div className="alert alertWarn">
           <div style={{ fontWeight: 950 }}>Access restricted</div>
-          <div className="muted" style={{ marginTop: 6 }}>
-            This page is only for managers and admins.
-          </div>
+          <div className="muted" style={{ marginTop: 6 }}>This page is only for managers and admins.</div>
         </div>
       </AppShell>
     );
@@ -288,11 +323,15 @@ function ApprovalsInner() {
         </div>
       ) : null}
 
-      {groups.length === 0 ? (
+      {loadingWeek ? (
+        <div className="card cardPad" style={{ marginTop: 14 }}>
+          <div className="muted">Loading week…</div>
+        </div>
+      ) : groups.length === 0 ? (
         <div className="card cardPad" style={{ marginTop: 14 }}>
           <div style={{ fontWeight: 950 }}>Nothing to approve</div>
           <div className="muted" style={{ marginTop: 6 }}>
-            No submitted time entries for this week.
+            {isAdmin ? "No submitted time entries for this week." : "No submitted time entries from your direct reports for this week."}
           </div>
         </div>
       ) : (
@@ -313,9 +352,7 @@ function ApprovalsInner() {
 
                   <div className="apGroupRight">
                     <div className="apGroupTotal">
-                      <div className="muted" style={{ fontWeight: 900 }}>
-                        Total
-                      </div>
+                      <div className="muted" style={{ fontWeight: 900 }}>Total</div>
                       <div style={{ fontWeight: 950, fontSize: 18 }}>{total.toFixed(2)} hrs</div>
                     </div>
 

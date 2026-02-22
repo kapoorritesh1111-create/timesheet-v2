@@ -757,3 +757,241 @@ button:hover { box-shadow: var(--shadow-sm); }
     grid-template-columns: 1fr;
   }
 }
+
+/* --- Projects UI polish --- */
+
+.prShell { max-width: 1100px; }
+
+.prHeaderRight {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.prSkel { display: grid; gap: 10px; }
+.prSkelLine { height: 16px; width: 260px; }
+.prSkelBar { height: 40px; width: 100%; }
+.prSkelTable { height: 320px; width: 100%; }
+
+.prCardHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.prTitle { font-weight: 950; font-size: 16px; }
+.prSub { margin-top: 6px; }
+
+.prLabel {
+  font-size: 12px;
+  font-weight: 900;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,0.55);
+  font-size: 12px;
+  font-weight: 850;
+  color: rgba(15,23,42,0.75);
+}
+.tagOk { border-color: rgba(34,197,94,0.25); }
+.tagWarn { border-color: rgba(245,158,11,0.28); }
+
+.prCreateGrid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 2fr 1fr auto;
+  gap: 12px;
+  align-items: end;
+}
+
+.prCreateBtnWrap { display: flex; justify-content: flex-end; }
+
+.prFilters {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.prFiltersLeft {
+  display: flex;
+  gap: 10px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.prFiltersRight {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prField { min-width: 180px; }
+.prSearch { min-width: 280px; }
+
+.prClearWrap { display: flex; align-items: end; }
+
+.prList { display: grid; gap: 10px; }
+
+.prRow {
+  padding: 12px;
+  border: 1px solid rgba(15,23,42,0.08);
+  border-radius: 14px;
+  background: rgba(255,255,255,0.7);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  cursor: pointer;
+}
+
+.prRow:hover {
+  background: rgba(255,255,255,0.85);
+}
+
+.prRowInactive {
+  opacity: 0.85;
+  background: rgba(15,23,42,0.03);
+}
+
+.prRowLeft {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.prDot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(37,99,235,0.35);
+  box-shadow: 0 0 0 4px rgba(37,99,235,0.10);
+  flex: 0 0 auto;
+}
+
+.prCheck { width: 18px; height: 18px; }
+
+.prRowTitle {
+  font-weight: 950;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.prRowMeta { font-size: 12px; margin-top: 4px; }
+
+.prRowRight { font-size: 12px; }
+
+.prRowActions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.prInline {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.prInlineLabel { font-size: 12px; font-weight: 900; }
+.prInlineSaving { font-size: 12px; min-width: 70px; }
+
+.prSelected { margin-top: 16px; }
+.prSelectedSelect { max-width: 520px; }
+
+/* Drawer */
+.prDrawerOverlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15,23,42,0.35);
+  z-index: 50;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.prDrawer {
+  width: min(520px, 92vw);
+  height: 100%;
+  background: rgba(255,255,255,0.98);
+  border-left: 1px solid rgba(15,23,42,0.10);
+  box-shadow: -12px 0 40px rgba(15,23,42,0.15);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow: auto;
+}
+
+.prDrawerHeader {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.prDrawerTitle { font-size: 16px; font-weight: 950; }
+.prDrawerTags { margin-top: 8px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+
+.prIdRow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.prCode { font-size: 12px; }
+
+.prDrawerSettings {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.prDrawerActions { display: flex; justify-content: flex-end; gap: 8px; }
+
+.prDrawerMembers { flex: 1; }
+
+.prMemberList { display: grid; gap: 10px; }
+.prMemberRow {
+  padding: 10px;
+  border: 1px solid rgba(15,23,42,0.08);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.65);
+}
+
+.prMemberTop {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.prMemberName { font-weight: 950; }
+.prMemberId { font-size: 12px; margin-top: 4px; }
+
+.prDrawerFooter { font-size: 12px; }
+
+/* Responsive */
+@media (max-width: 980px) {
+  .prCreateGrid { grid-template-columns: 1fr; }
+  .prCreateBtnWrap { justify-content: flex-start; }
+  .prField, .prSearch { min-width: 100%; }
+  .prInlineSaving { display: none; }
+}

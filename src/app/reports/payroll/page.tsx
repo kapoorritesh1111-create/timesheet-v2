@@ -1,7 +1,7 @@
+// src/app/reports/payroll/page.tsx
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties } from "react";
 import { useRouter } from "next/navigation";
 import RequireOnboarding from "../../../components/auth/RequireOnboarding";
 import AppShell from "../../../components/layout/AppShell";
@@ -62,7 +62,7 @@ function PayrollInner() {
   const router = useRouter();
   const { loading: profLoading, userId, profile, error } = useProfile();
 
-  // default week start = Sunday (SaaS payroll friendly + your request)
+  // default week start = Sunday
   const [weekStart, setWeekStart] = useState<WeekStart>("sunday");
 
   const [preset, setPreset] = useState<DatePreset>("last_month");
@@ -99,10 +99,7 @@ function PayrollInner() {
     let cancelled = false;
 
     (async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("id,name,week_start")
-        .order("name", { ascending: true });
+      const { data, error } = await supabase.from("projects").select("id,name,week_start").order("name", { ascending: true });
 
       if (cancelled) return;
       if (error) {
@@ -205,7 +202,14 @@ function PayrollInner() {
 
       const existing = map.get(uid);
       if (!existing) {
-        map.set(uid, { user_id: uid, full_name: getNameFromRow(r), total_hours: hours, first_rate: rate, rate_is_mixed: false, total_pay: pay });
+        map.set(uid, {
+          user_id: uid,
+          full_name: getNameFromRow(r),
+          total_hours: hours,
+          first_rate: rate,
+          rate_is_mixed: false,
+          total_pay: pay,
+        });
       } else {
         existing.total_hours += hours;
         existing.total_pay += pay;
@@ -235,16 +239,30 @@ function PayrollInner() {
   }, [rows]);
 
   const totalsByUser = useMemo(() => {
-    let hours = 0, pay = 0;
-    for (const r of summaryByUser) { hours += r.total_hours; pay += r.total_pay; }
+    let hours = 0,
+      pay = 0;
+    for (const r of summaryByUser) {
+      hours += r.total_hours;
+      pay += r.total_pay;
+    }
     return { hours, pay };
   }, [summaryByUser]);
 
   const totalsByProject = useMemo(() => {
-    let hours = 0, pay = 0;
-    for (const r of summaryByProject) { hours += r.total_hours; pay += r.total_pay; }
+    let hours = 0,
+      pay = 0;
+    for (const r of summaryByProject) {
+      hours += r.total_hours;
+      pay += r.total_pay;
+    }
     return { hours, pay };
   }, [summaryByProject]);
+
+  const avgRate = useMemo(() => {
+    const h = totalsByUser.hours;
+    if (h <= 0) return 0;
+    return totalsByUser.pay / h;
+  }, [totalsByUser]);
 
   function exportSummaryCsv() {
     const projName = projectId ? projects.find((p) => p.id === projectId)?.name : "All";
@@ -256,33 +274,61 @@ function PayrollInner() {
 
     if (exportCurrentTableOnly) {
       if (currentTable === "contractors") {
-        const header = ["Preset","WeekStart","Start","End","Status","Project","Contractor filter","Contractor","Hours","Rate","Pay"];
+        const header = ["Preset", "WeekStart", "Start", "End", "Status", "Project", "Contractor filter", "Contractor", "Hours", "Rate", "Pay"];
         const lines: string[] = [header.map(csvEscape).join(",")];
 
         for (const r of summaryByUser) {
-          lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)].map(csvEscape).join(","));
+          lines.push(
+            [
+              preset,
+              weekStart,
+              startDate,
+              endDate,
+              status,
+              projName,
+              contractorName,
+              r.full_name,
+              r.total_hours.toFixed(2),
+              r.rate_is_mixed ? "mixed" : money(r.first_rate),
+              money(r.total_pay),
+            ]
+              .map(csvEscape)
+              .join(",")
+          );
         }
-        lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)].map(csvEscape).join(","));
+        lines.push(
+          [preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)]
+            .map(csvEscape)
+            .join(",")
+        );
         return downloadCsv(`payroll_contractors_${startDate}_to_${endDate}.csv`, lines.join("\n"));
       }
 
-      const header = ["Preset","WeekStart","Start","End","Status","Project filter","Contractor filter","Project","Hours","Pay"];
+      const header = ["Preset", "WeekStart", "Start", "End", "Status", "Project filter", "Contractor filter", "Project", "Hours", "Pay"];
       const lines: string[] = [header.map(csvEscape).join(",")];
 
       for (const r of summaryByProject) {
         lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, r.project_name, r.total_hours.toFixed(2), money(r.total_pay)].map(csvEscape).join(","));
       }
-      lines.push([preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByProject.hours.toFixed(2), money(totalsByProject.pay)].map(csvEscape).join(","));
+      lines.push(
+        [preset, weekStart, startDate, endDate, status, projName, contractorName, "TOTAL", totalsByProject.hours.toFixed(2), money(totalsByProject.pay)]
+          .map(csvEscape)
+          .join(",")
+      );
       return downloadCsv(`payroll_projects_${startDate}_to_${endDate}.csv`, lines.join("\n"));
     }
 
     // both tables
-    const header = ["Report","Preset","WeekStart","Start","End","Status","Project","Contractor","","Section","Name","Hours","Rate","Pay"];
+    const header = ["Report", "Preset", "WeekStart", "Start", "End", "Status", "Project", "Contractor", "", "Section", "Name", "Hours", "Rate", "Pay"];
     const baseMeta = ["Payroll Summary", preset, weekStart, startDate, endDate, status, projName || "All", contractorName || "All", ""];
     const lines: string[] = [header.map(csvEscape).join(",")];
 
     for (const r of summaryByUser) {
-      lines.push([...baseMeta, "By Contractor", r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)].map(csvEscape).join(","));
+      lines.push(
+        [...baseMeta, "By Contractor", r.full_name, r.total_hours.toFixed(2), r.rate_is_mixed ? "mixed" : money(r.first_rate), money(r.total_pay)]
+          .map(csvEscape)
+          .join(",")
+      );
     }
     lines.push([...baseMeta, "By Contractor", "TOTAL", totalsByUser.hours.toFixed(2), "", money(totalsByUser.pay)].map(csvEscape).join(","));
 
@@ -295,7 +341,7 @@ function PayrollInner() {
   }
 
   function exportDetailCsv() {
-    const header = ["entry_id","entry_date","status","contractor","user_id","project","project_id","hours","hourly_rate_snapshot","pay"];
+    const header = ["entry_id", "entry_date", "status", "contractor", "user_id", "project", "project_id", "hours", "hourly_rate_snapshot", "pay"];
     const lines: string[] = [header.map(csvEscape).join(",")];
 
     for (const r of rows) {
@@ -307,53 +353,69 @@ function PayrollInner() {
     return downloadCsv(`payroll_details_${startDate}_to_${endDate}.csv`, lines.join("\n"));
   }
 
+  const headerRight = (
+    <div className="payHeaderRight">
+      <label className="payCsvToggle muted">
+        <input
+          type="checkbox"
+          checked={exportCurrentTableOnly}
+          onChange={(e) => setExportCurrentTableOnly(e.target.checked)}
+          disabled={rows.length === 0 || busy}
+        />
+        Download current table only
+      </label>
+
+      <select
+        value={currentTable}
+        onChange={(e) => setCurrentTable(e.target.value as any)}
+        disabled={!exportCurrentTableOnly || rows.length === 0 || busy}
+      >
+        <option value="contractors">Summary by Contractor</option>
+        <option value="projects">Summary by Project</option>
+      </select>
+
+      <button className="pill" onClick={exportSummaryCsv} disabled={rows.length === 0 || busy}>
+        Export Summary CSV
+      </button>
+      <button className="pill" onClick={exportDetailCsv} disabled={rows.length === 0 || busy}>
+        Export Detail CSV
+      </button>
+      <button className="btnPrimary" onClick={load} disabled={busy}>
+        {busy ? "Loading…" : "Run Report"}
+      </button>
+    </div>
+  );
+
   if (profLoading) {
-    return <AppShell title="Payroll"><div className="card cardPad">Loading…</div></AppShell>;
+    return (
+      <AppShell title="Payroll" subtitle="Loading profile…">
+        <div className="card cardPad">
+          <div className="muted">Loading…</div>
+        </div>
+      </AppShell>
+    );
   }
   if (!userId) return null;
 
   if (!profile) {
     return (
-      <AppShell title="Payroll">
-        <div className="card cardPad">
-          <div style={{ fontWeight: 900 }}>Profile missing</div>
+      <AppShell title="Payroll" subtitle="Profile required">
+        <div className="alert alertWarn">
+          <div style={{ fontWeight: 950 }}>Profile missing</div>
           <pre style={{ whiteSpace: "pre-wrap", marginTop: 8 }}>{error || "No profile found."}</pre>
         </div>
       </AppShell>
     );
   }
 
-  const controlsStyle: CSSProperties = { display: "grid", gridTemplateColumns: "repeat(6, minmax(0, 1fr))", gap: 12 };
-  const tableStyle: CSSProperties = { width: "100%", borderCollapse: "collapse", fontSize: 14 };
-  const cell: CSSProperties = { padding: "10px 8px", borderBottom: "1px solid rgba(15, 23, 42, 0.10)", verticalAlign: "top" };
-  const totalsRowStyle: CSSProperties = { fontWeight: 900, borderTop: "2px solid rgba(15, 23, 42, 0.18)" };
+  const subtitle = `Approved hours × snapshot rate • Week starts: ${weekStart}`;
 
   return (
-    <AppShell
-      title="Payroll"
-      subtitle={`Approved hours × snapshot rate • Week starts: ${weekStart}`}
-      right={
-        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-          <label style={{ display: "flex", gap: 8, alignItems: "center" }} className="muted">
-            <input type="checkbox" checked={exportCurrentTableOnly} onChange={(e) => setExportCurrentTableOnly(e.target.checked)} disabled={rows.length === 0 || busy} />
-            Download as CSV (current table only)
-          </label>
-
-          <select value={currentTable} onChange={(e) => setCurrentTable(e.target.value as any)} disabled={!exportCurrentTableOnly || rows.length === 0 || busy}>
-            <option value="contractors">Summary by Contractor</option>
-            <option value="projects">Summary by Project</option>
-          </select>
-
-          <button className="btn" onClick={exportSummaryCsv} disabled={rows.length === 0 || busy}>Export Summary CSV</button>
-          <button className="btn" onClick={exportDetailCsv} disabled={rows.length === 0 || busy}>Export Detail CSV</button>
-          <button className="btn btnPrimary" onClick={load} disabled={busy}>{busy ? "Loading…" : "Run Report"}</button>
-        </div>
-      }
-    >
-      <div className="card cardPad" style={{ marginBottom: 12 }}>
-        <div style={controlsStyle}>
-          <div style={{ gridColumn: "span 2" }}>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Date Range</div>
+    <AppShell title="Payroll" subtitle={subtitle} right={headerRight}>
+      <div className="card cardPad payControls">
+        <div className="payGrid">
+          <div className="payField paySpan2">
+            <div className="payLabel">Date Range</div>
             <select value={preset} onChange={(e) => setPreset(e.target.value as DatePreset)}>
               <option value="current_week">Current week</option>
               <option value="last_week">Last week</option>
@@ -363,18 +425,32 @@ function PayrollInner() {
             </select>
           </div>
 
-          <div>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Start</div>
-            <input type="date" value={startDate} onChange={(e) => { setPreset("custom"); setStartDate(e.target.value); }} />
+          <div className="payField">
+            <div className="payLabel">Start</div>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => {
+                setPreset("custom");
+                setStartDate(e.target.value);
+              }}
+            />
           </div>
 
-          <div>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>End</div>
-            <input type="date" value={endDate} onChange={(e) => { setPreset("custom"); setEndDate(e.target.value); }} />
+          <div className="payField">
+            <div className="payLabel">End</div>
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => {
+                setPreset("custom");
+                setEndDate(e.target.value);
+              }}
+            />
           </div>
 
-          <div>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Status</div>
+          <div className="payField">
+            <div className="payLabel">Status</div>
             <select value={status} onChange={(e) => setStatus(e.target.value as any)}>
               <option value="approved">approved</option>
               <option value="submitted">submitted</option>
@@ -383,99 +459,123 @@ function PayrollInner() {
             </select>
           </div>
 
-          <div>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Project</div>
+          <div className="payField">
+            <div className="payLabel">Project</div>
             <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
               <option value="">All</option>
-              {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {projects.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
             </select>
           </div>
 
-          <div>
-            <div className="muted" style={{ fontSize: 12, fontWeight: 800, marginBottom: 6 }}>Contractor</div>
+          <div className="payField">
+            <div className="payLabel">Contractor</div>
             <select value={contractorId} onChange={(e) => setContractorId(e.target.value)} disabled={isContractor}>
               <option value="">{isContractor ? "(you)" : "All"}</option>
-              {!isContractor && contractors.map((c) => <option key={c.id} value={c.id}>{c.full_name || c.id}</option>)}
+              {!isContractor &&
+                contractors.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.full_name || c.id}
+                  </option>
+                ))}
             </select>
           </div>
         </div>
 
-        {msg ? <div style={{ marginTop: 10, color: "#b91c1c", fontSize: 13, whiteSpace: "pre-wrap" }}>{msg}</div> : null}
+        {msg ? (
+          <div className="alert alertInfo" style={{ marginTop: 10 }}>
+            <pre style={{ margin: 0, whiteSpace: "pre-wrap" }}>{msg}</pre>
+          </div>
+        ) : null}
       </div>
 
-      <div className="card cardPad" style={{ marginBottom: 12 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 900 }}>Summary by Contractor</div>
-          <button className="btn" onClick={() => setCurrentTable("contractors")}>Set as current table</button>
+      <div className="payKpis">
+        <div className="card cardPad payKpi">
+          <div className="payKpiLabel">Total Hours</div>
+          <div className="payKpiValue">{totalsByUser.hours.toFixed(2)}</div>
+        </div>
+        <div className="card cardPad payKpi">
+          <div className="payKpiLabel">Total Pay</div>
+          <div className="payKpiValue">${money(totalsByUser.pay)}</div>
+        </div>
+        <div className="card cardPad payKpi">
+          <div className="payKpiLabel">Avg Rate</div>
+          <div className="payKpiValue">${money(avgRate)}</div>
+        </div>
+      </div>
+
+      <div className="card cardPad paySection">
+        <div className="paySectionHeader">
+          <div className="paySectionTitle">Summary by Contractor</div>
+          <button className="pill" onClick={() => setCurrentTable("contractors")} title="Use for CSV export">
+            Set current
+          </button>
         </div>
 
         {summaryByUser.length === 0 ? (
-          <div className="muted" style={{ fontSize: 13 }}>No rows for the selected filters.</div>
+          <div className="muted">No rows for the selected filters.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={{ ...cell, textAlign: "left" }}>Contractor</th>
-                  <th style={{ ...cell, textAlign: "right" }}>Hours</th>
-                  <th style={{ ...cell, textAlign: "right" }}>Rate</th>
-                  <th style={{ ...cell, textAlign: "right" }}>Pay</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summaryByUser.map((r) => (
-                  <tr key={r.user_id}>
-                    <td style={{ ...cell, textAlign: "left" }}>{r.full_name}</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{r.total_hours.toFixed(2)}</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{r.rate_is_mixed ? "(mixed)" : money(r.first_rate)}</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{money(r.total_pay)}</td>
-                  </tr>
-                ))}
-                <tr>
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "left" }}>TOTAL</td>
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{totalsByUser.hours.toFixed(2)}</td>
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }} />
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{money(totalsByUser.pay)}</td>
-                </tr>
-              </tbody>
-            </table>
+          <div className="payTableWrap">
+            <div className="payTableHead">
+              <div>Contractor</div>
+              <div className="right">Hours</div>
+              <div className="right">Rate</div>
+              <div className="right">Pay</div>
+            </div>
+
+            {summaryByUser.map((r) => (
+              <div key={r.user_id} className="payTableRow">
+                <div>{r.full_name}</div>
+                <div className="right mono">{r.total_hours.toFixed(2)}</div>
+                <div className="right mono">{r.rate_is_mixed ? "mixed" : money(r.first_rate)}</div>
+                <div className="right mono">${money(r.total_pay)}</div>
+              </div>
+            ))}
+
+            <div className="payTableTotals">
+              <div>TOTAL</div>
+              <div className="right mono">{totalsByUser.hours.toFixed(2)}</div>
+              <div />
+              <div className="right mono">${money(totalsByUser.pay)}</div>
+            </div>
           </div>
         )}
       </div>
 
-      <div className="card cardPad">
-        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center", marginBottom: 10 }}>
-          <div style={{ fontWeight: 900 }}>Summary by Project</div>
-          <button className="btn" onClick={() => setCurrentTable("projects")}>Set as current table</button>
+      <div className="card cardPad paySection">
+        <div className="paySectionHeader">
+          <div className="paySectionTitle">Summary by Project</div>
+          <button className="pill" onClick={() => setCurrentTable("projects")} title="Use for CSV export">
+            Set current
+          </button>
         </div>
 
         {summaryByProject.length === 0 ? (
-          <div className="muted" style={{ fontSize: 13 }}>No rows for the selected filters.</div>
+          <div className="muted">No rows for the selected filters.</div>
         ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table style={tableStyle}>
-              <thead>
-                <tr>
-                  <th style={{ ...cell, textAlign: "left" }}>Project</th>
-                  <th style={{ ...cell, textAlign: "right" }}>Hours</th>
-                  <th style={{ ...cell, textAlign: "right" }}>Pay</th>
-                </tr>
-              </thead>
-              <tbody>
-                {summaryByProject.map((r) => (
-                  <tr key={r.project_id}>
-                    <td style={{ ...cell, textAlign: "left" }}>{r.project_name}</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{r.total_hours.toFixed(2)}</td>
-                    <td style={{ ...cell, textAlign: "right" }}>{money(r.total_pay)}</td>
-                  </tr>
-                ))}
-                <tr>
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "left" }}>TOTAL</td>
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{totalsByProject.hours.toFixed(2)}</td>
-                  <td style={{ ...cell, ...totalsRowStyle, textAlign: "right" }}>{money(totalsByProject.pay)}</td>
-                </tr>
-              </tbody>
-            </table>
+          <div className="payTableWrap">
+            <div className="payTableHead payProjCols">
+              <div>Project</div>
+              <div className="right">Hours</div>
+              <div className="right">Pay</div>
+            </div>
+
+            {summaryByProject.map((r) => (
+              <div key={r.project_id} className="payTableRow payProjCols">
+                <div>{r.project_name}</div>
+                <div className="right mono">{r.total_hours.toFixed(2)}</div>
+                <div className="right mono">${money(r.total_pay)}</div>
+              </div>
+            ))}
+
+            <div className="payTableTotals payProjCols">
+              <div>TOTAL</div>
+              <div className="right mono">{totalsByProject.hours.toFixed(2)}</div>
+              <div className="right mono">${money(totalsByProject.pay)}</div>
+            </div>
           </div>
         )}
       </div>

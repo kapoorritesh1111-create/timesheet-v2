@@ -1,3 +1,4 @@
+// src/components/layout/TopNav.tsx
 "use client";
 
 import Link from "next/link";
@@ -37,7 +38,11 @@ export default function TopNav() {
     { href: "/reports/payroll", label: "Payroll", show: true, match: "prefix" },
 
     { href: "/projects", label: "Projects", match: "exact" },
-    { href: "/profiles", label: "Profiles", show: isAdmin, match: "exact" },
+
+    // ✅ People: Admin + Manager (page itself enforces scoping)
+    { href: "/profiles", label: "People", show: isManagerOrAdmin, match: "exact" },
+
+    // Admin only
     { href: "/admin", label: "Admin", show: isAdmin, match: "exact" },
   ];
 
